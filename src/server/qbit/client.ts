@@ -18,23 +18,27 @@ export interface QbitTorrentInfo {
   state: string;
 }
 
+export interface QbitCredentials {
+  baseUrl: string;
+  apiKey: string;
+}
+
 export class QbitClient {
-  private baseUrlOverride: string | null;
-  private apiKeyOverride: string | null;
+  private overrides: Partial<QbitCredentials>;
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl?: string, apiKey?: string) {
-    this.baseUrlOverride = baseUrl ?? null;
-    this.apiKeyOverride = apiKey ?? null;
+  /** 不传 overrides 时凭据实时取自 settings；传入则用于临时连接（如测试） */
+  constructor(overrides: Partial<QbitCredentials> = {}) {
+    this.overrides = overrides;
   }
 
   /** settings 每次读取，UI 修改后无需重启即生效 */
   private get baseUrl(): string {
-    return (this.baseUrlOverride ?? getSettings().qbitUrl).replace(/\/+$/, "");
+    return (this.overrides.baseUrl ?? getSettings().qbitUrl).replace(/\/+$/, "");
   }
 
   private get apiKey(): string {
-    return this.apiKeyOverride ?? getSettings().qbitApiKey;
+    return this.overrides.apiKey ?? getSettings().qbitApiKey;
   }
 
   get configured(): boolean {
@@ -71,6 +75,11 @@ export class QbitClient {
 
   async webApiVersion(): Promise<string> {
     const res = await this.request("/app/webapiVersion");
+    return res.text();
+  }
+
+  async appVersion(): Promise<string> {
+    const res = await this.request("/app/version");
     return res.text();
   }
 

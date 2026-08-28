@@ -72,6 +72,12 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   runJob: (name: string) => request<{ ok: boolean }>(`/jobs/${name}/run`, { method: "POST" }),
+  testConnection: (target: "mteam" | "qbit", values: Record<string, unknown>) =>
+    request<{ ok: boolean; message: string }>(`/test/${target}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    }),
   ptCategories: () => request<PtCategory[]>("/pt/categories"),
 };
 
