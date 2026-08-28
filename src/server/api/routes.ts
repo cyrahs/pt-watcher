@@ -74,33 +74,6 @@ api.post("/torrents/:id/:action", async (c) => {
         .where(eq(schema.torrents.id, id));
       await logEvent("manual_delete", `手动删除: ${row.name}`, { torrentRef: row.infoHash });
       break;
-    case "untrack":
-      await db
-        .update(schema.torrents)
-        .set({ state: "untracked", untrackedAt: new Date() })
-        .where(eq(schema.torrents.id, id));
-      await logEvent("untracked", `手动脱管: ${row.name}`, { torrentRef: row.infoHash });
-      break;
-    case "retrack": {
-      if (row.state !== "untracked") return c.json({ error: "not untracked" }, 400);
-      const infos = await qbit.torrentsInfo({ hashes: [row.infoHash] });
-      const q = infos[0];
-      if (!q) return c.json({ error: "torrent not in qBittorrent" }, 404);
-      const managed = new Set(getSettings().managedCategories);
-      if (!managed.has(q.category)) {
-        return c.json({ error: `分类 [${q.category}] 不在受管列表，请先移回受管分类` }, 400);
-      }
-      await db
-        .update(schema.torrents)
-        .set({
-          state: q.progress >= 1 ? "completed" : "downloading",
-          category: q.category,
-          untrackedAt: null,
-        })
-        .where(eq(schema.torrents.id, id));
-      await logEvent("retracked", `手动重新纳管: ${row.name}`, { torrentRef: row.infoHash });
-      break;
-    }
     default:
       return c.json({ error: "unknown action" }, 400);
   }

@@ -18,7 +18,7 @@ import {
 //   stopped_free_expired free 到期未完成，已被停止（受管，清理优先级最高）
 //   deleted_by_cleanup   已被空间清理删除（终态）
 //   removed_external     在 qBittorrent 中被外部删除（终态）
-//   untracked            已脱管（移出受管分类或手动脱管，永不自动操作）
+//   untracked            已脱管（移出受管分类，不被自动操作；移回受管分类自动重新纳管）
 export const torrents = pgTable(
   "torrents",
   {
