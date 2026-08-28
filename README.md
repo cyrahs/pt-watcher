@@ -19,18 +19,19 @@
 
 ## 部署
 
-### 环境变量（secrets，对应 k8s Secret）
+### 环境变量
 
 | 变量 | 说明 |
 | --- | --- |
 | `DATABASE_URL` | Postgres 连接串，如 `postgres://user:pass@host:5432/ptwatcher` |
-| `MT_API_KEY` | M-Team API key（控制台 → 实验室 → 存取令牌） |
-| `MT_BASE_URL` | 可选，默认 `https://api.m-team.cc/api` |
-| `QBIT_URL` | qBittorrent WebUI 地址，如 `http://qbittorrent:8080` |
-| `QBIT_USER` / `QBIT_PASS` | qBittorrent WebUI 账号密码 |
 | `PORT` | 可选，默认 3000 |
 
-行为配置（阈值、间隔、受管分类、评分权重等）存 Postgres `settings` 表，通过 Web UI 修改，启动时自动写入默认值。
+其余配置全部存 Postgres `settings` 表，通过 Web UI「设置」页修改：
+
+- **连接配置**：M-Team API key（控制台 → 实验室 → 存取令牌）与 API 地址、qBittorrent WebUI 地址/账号/密码，保存后立即生效无需重启
+- **行为配置**：阈值、间隔、受管分类、评分权重等
+
+兼容迁移：settings 表中尚无对应值时，`MT_API_KEY` / `MT_BASE_URL` / `QBIT_URL` / `QBIT_USER` / `QBIT_PASS` 环境变量会作为初始默认值被读入（首次保存后即以 UI 中的值为准）。
 
 ### K8s 要点
 

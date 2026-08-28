@@ -2,21 +2,24 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
 
-// ---- secrets: 只从环境变量读取（对应 k8s Secret）----
+// ---- 部署层配置: 只从环境变量读取（数据库连接与监听端口，UI 可达之前就需要）----
 
 export const env = {
   databaseUrl: process.env.DATABASE_URL ?? "",
-  mtApiKey: process.env.MT_API_KEY ?? "",
-  mtBaseUrl: process.env.MT_BASE_URL ?? "https://api.m-team.cc/api",
-  qbitUrl: (process.env.QBIT_URL ?? "").replace(/\/+$/, ""),
-  qbitUser: process.env.QBIT_USER ?? "",
-  qbitPass: process.env.QBIT_PASS ?? "",
   port: Number(process.env.PORT ?? 3000),
 };
 
 // ---- 行为配置: 存 settings 表，UI 可编辑，此处定义 schema 与默认值 ----
+// 连接类字段的环境变量仅作为 settings 表中尚无该值时的默认种子
 
 export const settingsSchema = z.object({
+  // 站点与下载器连接
+  mtApiKey: z.string().default(process.env.MT_API_KEY ?? ""),
+  mtBaseUrl: z.string().default(process.env.MT_BASE_URL ?? "https://api.m-team.cc/api"),
+  qbitUrl: z.string().default(process.env.QBIT_URL ?? ""),
+  qbitUser: z.string().default(process.env.QBIT_USER ?? ""),
+  qbitPass: z.string().default(process.env.QBIT_PASS ?? ""),
+
   // 受管分类
   managedCategories: z.array(z.string()).default(["pt-watcher"]),
   incomingCategory: z.string().default("pt-watcher"),
