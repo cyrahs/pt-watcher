@@ -1,4 +1,4 @@
-import { env } from "../config";
+import { getSettings } from "../config";
 
 export interface QbitTorrentInfo {
   hash: string;
@@ -19,23 +19,35 @@ export interface QbitTorrentInfo {
 }
 
 export class QbitClient {
-  private baseUrl: string;
+  private baseUrlOverride: string | null;
   private cookie = "";
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl = env.qbitUrl) {
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+  constructor(baseUrl?: string) {
+    this.baseUrlOverride = baseUrl ?? null;
+  }
+
+  /** settings 每次读取，UI 修改后无需重启即生效 */
+  private get baseUrl(): string {
+    return (this.baseUrlOverride ?? getSettings().qbitUrl).replace(/\/+$/, "");
   }
 
   get configured(): boolean {
     return Boolean(this.baseUrl);
   }
 
+  /** 连接配置变更后调用，丢弃旧会话与版本探测结果 */
+  resetConnection(): void {
+    this.cookie = "";
+    this.stopVerb = null;
+  }
+
   private async login(): Promise<void> {
+    const s = getSettings();
     const res = await fetch(`${this.baseUrl}/api/v2/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: env.qbitUser, password: env.qbitPass }).toString(),
+      body: new URLSearchParams({ username: s.qbitUser, password: s.qbitPass }).toString(),
     });
     const text = await res.text();
     if (!res.ok || text.trim() !== "Ok.") {
@@ -48,7 +60,7 @@ export class QbitClient {
   }
 
   private async request(path: string, init: RequestInit = {}, retryAuth = true): Promise<Response> {
-    if (!this.baseUrl) throw new Error("QBIT_URL not configured");
+    if (!this.baseUrl) throw new Error("qBittorrent 未配置（请在设置页填写 WebUI 地址）");
     if (!this.cookie) await this.login();
     const res = await fetch(`${this.baseUrl}/api/v2${path}`, {
       ...init,

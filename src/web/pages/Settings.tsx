@@ -4,7 +4,7 @@ import { api, type PtCategory } from "../api";
 interface FieldDef {
   key: string;
   label: string;
-  type: "number" | "boolean" | "list" | "text" | "categories";
+  type: "number" | "boolean" | "list" | "text" | "password" | "categories";
 }
 
 const GROUP_LABELS: Record<string, string> = {
@@ -89,6 +89,16 @@ function CategoryPicker({
 }
 
 const GROUPS: { title: string; fields: FieldDef[] }[] = [
+  {
+    title: "连接配置",
+    fields: [
+      { key: "mtApiKey", label: "M-Team API Key（控制台 → 实验室 → 存取令牌）", type: "password" },
+      { key: "mtBaseUrl", label: "M-Team API 地址", type: "text" },
+      { key: "qbitUrl", label: "qBittorrent WebUI 地址（如 http://qbittorrent:8080）", type: "text" },
+      { key: "qbitUser", label: "qBittorrent 用户名", type: "text" },
+      { key: "qbitPass", label: "qBittorrent 密码", type: "password" },
+    ],
+  },
   {
     title: "分类管理",
     fields: [
@@ -210,7 +220,8 @@ export function Settings() {
                     <label htmlFor={f.key}>{f.label}</label>
                     <input
                       id={f.key}
-                      type={f.type === "number" ? "number" : "text"}
+                      type={f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}
+                      autoComplete={f.type === "password" ? "new-password" : undefined}
                       step="any"
                       value={
                         f.type === "list" ? (Array.isArray(v) ? v.join(", ") : "") : String(v ?? "")
