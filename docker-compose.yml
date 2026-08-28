@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ptwatcher
+      POSTGRES_PASSWORD: ptwatcher
+      POSTGRES_DB: ptwatcher
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  app:
+    build: .
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: postgres://ptwatcher:ptwatcher@postgres:5432/ptwatcher
+      MT_API_KEY: ${MT_API_KEY:-}
+      QBIT_URL: ${QBIT_URL:-}
+      QBIT_USER: ${QBIT_USER:-}
+      QBIT_PASS: ${QBIT_PASS:-}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
