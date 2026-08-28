@@ -3,7 +3,7 @@ import { ZodError } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit } from "../qbit/client";
-import { env, getSettings, saveSettings } from "../config";
+import { getSettings, saveSettings } from "../config";
 import { getAdapters, resetAdapters } from "../pt/registry";
 import type { PtCategory } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
@@ -29,8 +29,8 @@ api.get("/status", async (c) => {
   }
   const s = getSettings();
   return c.json({
-    qbit: { configured: qbit.configured, connected: qbitOk, url: env.qbitUrl },
-    mteam: { configured: Boolean(env.mtApiKey) },
+    qbit: { configured: qbit.configured, connected: qbitOk, url: s.qbitUrl },
+    mteam: { configured: Boolean(s.mtApiKey) },
     freeSpaceBytes: freeSpace,
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,
     jobs: jobStatuses(),
@@ -139,6 +139,7 @@ api.put("/settings", async (c) => {
   try {
     const saved = await saveSettings(body);
     resetAdapters();
+    qbit.resetConnection();
     await logEvent("settings_updated", "配置已更新");
     return c.json(saved);
   } catch (e) {

@@ -1,19 +1,20 @@
 import type { PtAdapter } from "./types";
 import { MTeamAdapter } from "./mteam";
-import { env, getSettings } from "../config";
+import { getSettings } from "../config";
 
 let adapters: PtAdapter[] | null = null;
 
 export function getAdapters(): PtAdapter[] {
   if (adapters) return adapters;
   adapters = [];
-  if (env.mtApiKey) {
+  const s = getSettings();
+  if (s.mtApiKey) {
     adapters.push(
       new MTeamAdapter({
-        apiKey: env.mtApiKey,
-        baseUrl: env.mtBaseUrl,
-        modes: getSettings().searchModes,
-        categories: getSettings().searchCategories,
+        apiKey: s.mtApiKey,
+        baseUrl: s.mtBaseUrl,
+        modes: s.searchModes,
+        categories: s.searchCategories,
       }),
     );
   }

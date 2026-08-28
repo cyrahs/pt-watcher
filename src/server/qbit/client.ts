@@ -1,4 +1,4 @@
-import { env } from "../config";
+import { getSettings } from "../config";
 
 export interface QbitTorrentInfo {
   hash: string;
@@ -19,23 +19,37 @@ export interface QbitTorrentInfo {
 }
 
 export class QbitClient {
-  private baseUrl: string;
-  private apiKey: string;
+  private baseUrlOverride: string | null;
+  private apiKeyOverride: string | null;
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl = env.qbitUrl, apiKey = env.qbitApiKey) {
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
-    this.apiKey = apiKey;
+  constructor(baseUrl?: string, apiKey?: string) {
+    this.baseUrlOverride = baseUrl ?? null;
+    this.apiKeyOverride = apiKey ?? null;
+  }
+
+  /** settings 每次读取，UI 修改后无需重启即生效 */
+  private get baseUrl(): string {
+    return (this.baseUrlOverride ?? getSettings().qbitUrl).replace(/\/+$/, "");
+  }
+
+  private get apiKey(): string {
+    return this.apiKeyOverride ?? getSettings().qbitApiKey;
   }
 
   get configured(): boolean {
     return Boolean(this.baseUrl && this.apiKey);
   }
 
+  /** 连接配置变更后调用，丢弃版本探测结果 */
+  resetConnection(): void {
+    this.stopVerb = null;
+  }
+
   /** qBit >= 5.2 的 API key 认证：Authorization: Bearer，无状态无 cookie */
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
-    if (!this.baseUrl) throw new Error("QBIT_URL not configured");
-    if (!this.apiKey) throw new Error("QBIT_API_KEY not configured");
+    if (!this.baseUrl) throw new Error("qBittorrent 未配置（请在设置页填写 WebUI 地址）");
+    if (!this.apiKey) throw new Error("qBittorrent 未配置 API key（请在设置页填写，需 qBittorrent ≥ 5.2）");
     const res = await fetch(`${this.baseUrl}/api/v2${path}`, {
       ...init,
       headers: { Authorization: `Bearer ${this.apiKey}`, ...(init.headers as Record<string, string>) },
