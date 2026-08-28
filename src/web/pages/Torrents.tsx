@@ -23,8 +23,10 @@ const FILTERS = [
 const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"];
 
 function freeRemaining(t: TorrentRow): string {
-  if (!t.addedByWatcher) return "-";
-  if (t.freeEndTime === null) return t.state === "downloading" ? "不限时" : "-";
+  if (t.freeEndTime === null) {
+    // 有站点信息但无到期时间 = 不限时 free；纯收养（无站点信息）的显示 -
+    return t.siteId && t.state === "downloading" ? "不限时" : "-";
+  }
   const ms = new Date(t.freeEndTime).getTime() - Date.now();
   if (ms <= 0) return "已到期";
   return formatRelative(t.freeEndTime).replace("后", "");

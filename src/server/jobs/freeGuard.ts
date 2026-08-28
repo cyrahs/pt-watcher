@@ -6,8 +6,9 @@ import { getAdapter } from "../pt/registry";
 import { logEvent } from "../services/events";
 
 /**
- * free 到期守卫：对 watcher 添加、仍在下载、free 有明确到期时间的种子，
- * 在到期前（提前量内）复核站点状态，free 未延期则停止下载，避免产生下载流量。
+ * free 到期守卫：对已知站点信息（watcher 添加，或 discover 识别的手动添加）、
+ * 仍在下载、free 有明确到期时间的种子，在到期前（提前量内）复核站点状态，
+ * free 未延期则停止下载，避免产生下载流量。
  */
 export async function freeGuard(): Promise<void> {
   if (!qbit.configured) return;
@@ -20,7 +21,9 @@ export async function freeGuard(): Promise<void> {
     .where(
       and(
         eq(schema.torrents.state, "downloading"),
-        eq(schema.torrents.addedByWatcher, true),
+        // 有站点信息即受保护（含 discover 识别/回填的手动添加种子），
+        // 而不是只看 added_by_watcher
+        isNotNull(schema.torrents.siteId),
         isNotNull(schema.torrents.freeEndTime),
         lt(schema.torrents.freeEndTime, deadline),
       ),

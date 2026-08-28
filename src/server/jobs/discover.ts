@@ -112,11 +112,59 @@ export async function discover(): Promise<void> {
       const file = await adapter.fetchTorrentFile(t.torrentId);
       const infoHash = await infoHashFromTorrent(file);
 
-      const existing = await db
-        .select({ id: schema.torrents.id })
-        .from(schema.torrents)
-        .where(eq(schema.torrents.infoHash, infoHash));
-      if (existing.length > 0) {
+      // DB 已有记录（通常是 reconcile 收养的手动添加种子）：回填站点信息，
+      // 让它获得 freeGuard 保护（freeGuard 按 site_id 是否存在判定）
+      const existing = (
+        await db.select().from(schema.torrents).where(eq(schema.torrents.infoHash, infoHash))
+      )[0];
+      if (existing) {
+        if (!existing.siteId) {
+          await db
+            .update(schema.torrents)
+            .set({ siteId: t.siteId, siteTorrentId: t.torrentId, freeEndTime: t.freeEndTime })
+            .where(eq(schema.torrents.id, existing.id));
+          await logEvent(
+            "site_backfilled",
+            `识别到手动添加的站点 free 种子，已补全信息并纳入 free 到期保护: ${existing.name}`,
+            { torrentRef: infoHash, payload: { siteId: t.siteId, siteTorrentId: t.torrentId } },
+          );
+        }
+        await markSeen(t.siteId, t.torrentId);
+        continue;
+      }
+
+      // qBittorrent 已有但 DB 没有（手动添加且 reconcile 尚未跑，或在非受管分类）
+      const inQbit = (await qbit.torrentsInfo({ hashes: [infoHash] }))[0];
+      if (inQbit) {
+        if (new Set(s.managedCategories).has(inQbit.category)) {
+          await db.insert(schema.torrents).values({
+            infoHash,
+            siteId: t.siteId,
+            siteTorrentId: t.torrentId,
+            name: inQbit.name,
+            sizeBytes: inQbit.size,
+            category: inQbit.category,
+            state: inQbit.progress >= 1 ? "completed" : "downloading",
+            addedByWatcher: false,
+            freeEndTime: t.freeEndTime,
+            progress: inQbit.progress,
+            ratio: inQbit.ratio,
+            seeders: t.seeders,
+            leechers: t.leechers,
+            addedAt: new Date(inQbit.added_on * 1000),
+          });
+          await logEvent(
+            "adopted",
+            `识别到手动添加的站点 free 种子，已收养并纳入 free 到期保护: ${inQbit.name}`,
+            { torrentRef: infoHash, payload: { siteId: t.siteId, siteTorrentId: t.torrentId } },
+          );
+        } else {
+          await logEvent(
+            "discover_skipped",
+            `种子已存在于 qBittorrent 非受管分类 [${inQbit.category}]，跳过: ${inQbit.name}`,
+            { torrentRef: infoHash },
+          );
+        }
         await markSeen(t.siteId, t.torrentId);
         continue;
       }

@@ -3,6 +3,8 @@ import { api, formatRelative, type EventRow } from "../api";
 
 const TYPE_CLS: Record<string, string> = {
   added: "good",
+  adopted: "good",
+  site_backfilled: "good",
   completed: "good",
   free_extended: "good",
   retracked: "good",
