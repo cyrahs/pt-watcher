@@ -18,18 +18,25 @@ export interface QbitTorrentInfo {
   state: string;
 }
 
+export interface QbitCredentials {
+  baseUrl: string;
+  username: string;
+  password: string;
+}
+
 export class QbitClient {
-  private baseUrlOverride: string | null;
+  private overrides: Partial<QbitCredentials>;
   private cookie = "";
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl?: string) {
-    this.baseUrlOverride = baseUrl ?? null;
+  /** 不传 overrides 时凭据实时取自 settings；传入则用于临时连接（如测试） */
+  constructor(overrides: Partial<QbitCredentials> = {}) {
+    this.overrides = overrides;
   }
 
   /** settings 每次读取，UI 修改后无需重启即生效 */
   private get baseUrl(): string {
-    return (this.baseUrlOverride ?? getSettings().qbitUrl).replace(/\/+$/, "");
+    return (this.overrides.baseUrl ?? getSettings().qbitUrl).replace(/\/+$/, "");
   }
 
   get configured(): boolean {
@@ -44,10 +51,12 @@ export class QbitClient {
 
   private async login(): Promise<void> {
     const s = getSettings();
+    const username = this.overrides.username ?? s.qbitUser;
+    const password = this.overrides.password ?? s.qbitPass;
     const res = await fetch(`${this.baseUrl}/api/v2/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: s.qbitUser, password: s.qbitPass }).toString(),
+      body: new URLSearchParams({ username, password }).toString(),
     });
     const text = await res.text();
     if (!res.ok || text.trim() !== "Ok.") {
@@ -84,6 +93,11 @@ export class QbitClient {
 
   async webApiVersion(): Promise<string> {
     const res = await this.request("/app/webapiVersion");
+    return res.text();
+  }
+
+  async appVersion(): Promise<string> {
+    const res = await this.request("/app/version");
     return res.text();
   }
 

@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { ZodError } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../db";
-import { qbit } from "../qbit/client";
+import { qbit, QbitClient } from "../qbit/client";
 import { getSettings, saveSettings } from "../config";
+import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
 import type { PtCategory } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
@@ -148,6 +149,37 @@ api.put("/settings", async (c) => {
       return c.json({ error: msg }, 400);
     }
     return c.json({ error: String(e) }, 400);
+  }
+});
+
+// 连接测试：用请求体里的表单当前值（可未保存），缺省回退到已保存配置
+api.post("/test/mteam", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const s = getSettings();
+  const apiKey = typeof body.mtApiKey === "string" ? body.mtApiKey : s.mtApiKey;
+  const baseUrl =
+    typeof body.mtBaseUrl === "string" && body.mtBaseUrl ? body.mtBaseUrl : s.mtBaseUrl;
+  if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
+  try {
+    const username = await new MTeamAdapter({ apiKey, baseUrl }).testConnection();
+    return c.json({ ok: true, message: `连接成功，账号: ${username}` });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+api.post("/test/qbit", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const s = getSettings();
+  const baseUrl = typeof body.qbitUrl === "string" && body.qbitUrl ? body.qbitUrl : s.qbitUrl;
+  const username = typeof body.qbitUser === "string" ? body.qbitUser : s.qbitUser;
+  const password = typeof body.qbitPass === "string" ? body.qbitPass : s.qbitPass;
+  if (!baseUrl) return c.json({ error: "请先填写 WebUI 地址" }, 400);
+  try {
+    const version = await new QbitClient({ baseUrl, username, password }).appVersion();
+    return c.json({ ok: true, message: `连接成功，qBittorrent ${version}` });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }
 });
 
