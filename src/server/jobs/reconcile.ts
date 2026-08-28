@@ -14,9 +14,10 @@ function stateFromQbit(q: QbitTorrentInfo, prevState?: string): string {
 }
 
 /**
- * 与 qBittorrent 对账：
+ * 与 qBittorrent 对账（托管状态与分类强绑定）：
  * - 收养受管分类中未知的种子（added_by_watcher=false，参与清理不参与 freeGuard）
- * - 移出受管分类的置 untracked（永久脱管）
+ * - 移出受管分类的置 untracked（脱管）
+ * - 已脱管的种子移回受管分类则自动重新纳管
  * - qBit 中消失的置 removed_external
  * - 更新统计采样（上传速度 EMA、进度、swarm 数据）
  */
@@ -53,7 +54,7 @@ export async function reconcile(): Promise<void> {
         .update(schema.torrents)
         .set({ state: "untracked", category: q.category, untrackedAt: now })
         .where(eq(schema.torrents.id, row.id));
-      await logEvent("untracked", `种子移出受管分类，已永久脱管: ${row.name} → [${q.category}]`, {
+      await logEvent("untracked", `种子移出受管分类，已脱管: ${row.name} → [${q.category}]`, {
         torrentRef: row.infoHash,
       });
       continue;
@@ -82,7 +83,29 @@ export async function reconcile(): Promise<void> {
       .where(eq(schema.torrents.id, row.id));
   }
 
-  // 收养受管分类内的未知种子（跳过已有任何记录的 hash：untracked 的不重新纳管）
+  // 已脱管的种子移回受管分类 → 自动重新纳管
+  const untrackedRows = await db
+    .select()
+    .from(schema.torrents)
+    .where(eq(schema.torrents.state, "untracked"));
+  for (const row of untrackedRows) {
+    const q = byHash.get(row.infoHash);
+    if (!q || !managed.has(q.category)) continue;
+    await db
+      .update(schema.torrents)
+      .set({
+        state: stateFromQbit(q),
+        category: q.category,
+        untrackedAt: null,
+        statSampledAt: now,
+      })
+      .where(eq(schema.torrents.id, row.id));
+    await logEvent("retracked", `种子移回受管分类，已重新纳管: ${row.name} [${q.category}]`, {
+      torrentRef: row.infoHash,
+    });
+  }
+
+  // 收养受管分类内的未知种子（跳过已有任何记录的 hash，避免重复收养终态记录）
   const allRows = await db
     .select({ infoHash: schema.torrents.infoHash })
     .from(schema.torrents);

@@ -140,9 +140,6 @@ export function Torrents() {
                             </button>
                           )
                         ) : null}
-                        <button className="action" onClick={() => act(t.id, "untrack")}>
-                          脱管
-                        </button>
                         <button
                           className="action danger"
                           onClick={() => act(t.id, "delete", `确认删除种子及文件？\n${t.name}`)}
@@ -150,11 +147,6 @@ export function Torrents() {
                           删除
                         </button>
                       </>
-                    )}
-                    {t.state === "untracked" && (
-                      <button className="action" onClick={() => act(t.id, "retrack")}>
-                        重新纳管
-                      </button>
                     )}
                   </td>
                 </tr>
