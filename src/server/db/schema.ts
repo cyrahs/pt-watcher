@@ -35,6 +35,10 @@ export const torrents = pgTable(
     // 采样/评分
     upEma: doublePrecision("up_ema").notNull().default(0),
     lastUploadedBytes: bigint("last_uploaded_bytes", { mode: "number" }).notNull().default(0),
+    lastDownloadedBytes: bigint("last_downloaded_bytes", { mode: "number" }).notNull().default(0),
+    // 受管期间累计流量（自流量统计功能上线/纳管起，按采样差值累加）
+    totalUploadedBytes: bigint("total_uploaded_bytes", { mode: "number" }).notNull().default(0),
+    totalDownloadedBytes: bigint("total_downloaded_bytes", { mode: "number" }).notNull().default(0),
     ratio: doublePrecision("ratio").notNull().default(0),
     progress: doublePrecision("progress").notNull().default(0),
     seeders: integer("seeders").notNull().default(0),
@@ -76,6 +80,14 @@ export const events = pgTable(
   },
   (t) => [index("events_ts_idx").on(t.ts)],
 );
+
+// 受管种子每日流量聚合（day 为服务器本地日期 YYYY-MM-DD，部署时用 TZ 环境变量控制日切）
+export const trafficDaily = pgTable("traffic_daily", {
+  day: text("day").primaryKey(),
+  uploadedBytes: bigint("uploaded_bytes", { mode: "number" }).notNull().default(0),
+  downloadedBytes: bigint("downloaded_bytes", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),

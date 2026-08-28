@@ -1,4 +1,4 @@
-import type { FreeTorrent, PtAdapter, PtCategory } from "./types";
+import type { FreeTorrent, PtAdapter, PtCategory, SiteUserStats } from "./types";
 
 export interface MTeamOptions {
   apiKey: string;
@@ -47,6 +47,16 @@ interface MtTorrent {
 
 const FREE_DISCOUNTS = new Set(["FREE", "_2X_FREE"]);
 
+interface MtMemberProfile {
+  username?: string;
+  memberCount?: {
+    uploaded?: string | number;
+    downloaded?: string | number;
+    shareRate?: string | number;
+    bonus?: string | number;
+  };
+}
+
 /** M-Team 时间字符串为东八区，无时区标记，固定按 UTC+8 解析 */
 export function parseMtTime(s: string | null | undefined): Date | null {
   if (!s) return null;
@@ -85,6 +95,7 @@ export class MTeamAdapter implements PtAdapter {
   private pageSize: number;
   private lastRequestAt = 0;
   private categoryCache: { at: number; list: PtCategory[] } | null = null;
+  private userStatsCache: { at: number; stats: SiteUserStats } | null = null;
 
   constructor(opts: MTeamOptions) {
     this.apiKey = opts.apiKey;
@@ -174,6 +185,34 @@ export class MTeamAdapter implements PtAdapter {
       }));
     this.categoryCache = { at: Date.now(), list };
     return list;
+  }
+
+  /** 账号总量统计；带 5 分钟缓存，避免 Dashboard 高频轮询打爆站点 API */
+  async getUserStats(): Promise<SiteUserStats | null> {
+    if (this.userStatsCache && Date.now() - this.userStatsCache.at < 300_000) {
+      return this.userStatsCache.stats;
+    }
+    const data = await this.request<MtMemberProfile>("/member/profile", { method: "POST" });
+    const mc = data?.memberCount;
+    if (!mc) return null;
+    const uploadedBytes = Number(mc.uploaded ?? 0);
+    const downloadedBytes = Number(mc.downloaded ?? 0);
+    const shareRate =
+      mc.shareRate != null && mc.shareRate !== ""
+        ? Number(mc.shareRate)
+        : downloadedBytes > 0
+          ? uploadedBytes / downloadedBytes
+          : null;
+    const stats: SiteUserStats = {
+      siteId: this.siteId,
+      username: data.username ?? null,
+      uploadedBytes,
+      downloadedBytes,
+      shareRate: shareRate != null && Number.isFinite(shareRate) ? shareRate : null,
+      bonus: mc.bonus != null ? Number(mc.bonus) : null,
+    };
+    this.userStatsCache = { at: Date.now(), stats };
+    return stats;
   }
 
   /** 生成搜索计划：每个 mode 一项，可带分类过滤 */

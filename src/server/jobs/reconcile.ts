@@ -4,6 +4,7 @@ import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings } from "../config";
 import { updateEma } from "../services/popularity";
 import { logEvent } from "../services/events";
+import { addDailyTraffic, counterDelta } from "../services/traffic";
 
 /** 仍受管、会被自动操作的状态 */
 export const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"] as const;
@@ -35,6 +36,8 @@ export async function reconcile(): Promise<void> {
   const knownHashes = new Set(rows.map((r) => r.infoHash));
 
   const now = new Date();
+  let sumDeltaUp = 0;
+  let sumDeltaDown = 0;
 
   for (const row of rows) {
     const q = byHash.get(row.infoHash);
@@ -63,6 +66,10 @@ export async function reconcile(): Promise<void> {
     if (newState === "completed" && row.state === "downloading") {
       await logEvent("completed", `下载完成: ${row.name}`, { torrentRef: row.infoHash });
     }
+    const deltaUp = counterDelta(q.uploaded, row.lastUploadedBytes);
+    const deltaDown = counterDelta(q.downloaded, row.lastDownloadedBytes);
+    sumDeltaUp += deltaUp;
+    sumDeltaDown += deltaDown;
     await db
       .update(schema.torrents)
       .set({
@@ -74,6 +81,9 @@ export async function reconcile(): Promise<void> {
         ratio: q.ratio,
         upEma: updateEma(row.upEma, q.upspeed),
         lastUploadedBytes: q.uploaded,
+        lastDownloadedBytes: q.downloaded,
+        totalUploadedBytes: row.totalUploadedBytes + deltaUp,
+        totalDownloadedBytes: row.totalDownloadedBytes + deltaDown,
         seeders: q.num_complete,
         leechers: q.num_incomplete,
         qbitPopularity: q.popularity ?? 0,
@@ -81,6 +91,8 @@ export async function reconcile(): Promise<void> {
       })
       .where(eq(schema.torrents.id, row.id));
   }
+
+  await addDailyTraffic(sumDeltaUp, sumDeltaDown);
 
   // 收养受管分类内的未知种子（跳过已有任何记录的 hash：untracked 的不重新纳管）
   const allRows = await db
@@ -101,7 +113,9 @@ export async function reconcile(): Promise<void> {
       progress: q.progress,
       ratio: q.ratio,
       upEma: q.upspeed,
+      // 收养前的流量不计入 pt-watcher 统计，计数器从当前值起算
       lastUploadedBytes: q.uploaded,
+      lastDownloadedBytes: q.downloaded,
       seeders: q.num_complete,
       leechers: q.num_incomplete,
       qbitPopularity: q.popularity ?? 0,

@@ -41,6 +41,26 @@ export interface PtCategory {
   group: string;
 }
 
+export interface TrafficDay {
+  day: string;
+  uploadedBytes: number;
+  downloadedBytes: number;
+}
+
+export interface TrafficStats {
+  totals: { uploadedBytes: number; downloadedBytes: number };
+  daily: TrafficDay[];
+}
+
+export interface SiteUserStats {
+  siteId: string;
+  username: string | null;
+  uploadedBytes: number;
+  downloadedBytes: number;
+  shareRate: number | null;
+  bonus: number | null;
+}
+
 export interface Status {
   qbit: { configured: boolean; connected: boolean; url: string };
   mteam: { configured: boolean };
@@ -72,6 +92,8 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   runJob: (name: string) => request<{ ok: boolean }>(`/jobs/${name}/run`, { method: "POST" }),
+  trafficStats: (days = 30) => request<TrafficStats>(`/stats/traffic?days=${days}`),
+  siteStats: () => request<SiteUserStats[]>("/stats/site"),
   ptCategories: () => request<PtCategory[]>("/pt/categories"),
 };
 
