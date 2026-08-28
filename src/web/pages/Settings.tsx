@@ -102,8 +102,7 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
     test: "qbit",
     fields: [
       { key: "qbitUrl", label: "WebUI 地址（如 http://qbittorrent:8080）", type: "text" },
-      { key: "qbitUser", label: "用户名", type: "text" },
-      { key: "qbitPass", label: "密码", type: "password" },
+      { key: "qbitApiKey", label: "API Key（需 qBittorrent ≥ 5.2，WebUI 设置中生成，形如 qbt_...）", type: "password" },
     ],
   },
   {
@@ -183,7 +182,7 @@ export function Settings() {
     const payload =
       target === "mteam"
         ? { mtApiKey: values.mtApiKey, mtBaseUrl: values.mtBaseUrl }
-        : { qbitUrl: values.qbitUrl, qbitUser: values.qbitUser, qbitPass: values.qbitPass };
+        : { qbitUrl: values.qbitUrl, qbitApiKey: values.qbitApiKey };
     try {
       const res = await api.testConnection(target, payload);
       setTests((t) => ({ ...t, [target]: { status: "ok", text: res.message } }));

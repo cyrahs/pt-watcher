@@ -172,11 +172,11 @@ api.post("/test/qbit", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const s = getSettings();
   const baseUrl = typeof body.qbitUrl === "string" && body.qbitUrl ? body.qbitUrl : s.qbitUrl;
-  const username = typeof body.qbitUser === "string" ? body.qbitUser : s.qbitUser;
-  const password = typeof body.qbitPass === "string" ? body.qbitPass : s.qbitPass;
+  const apiKey = typeof body.qbitApiKey === "string" ? body.qbitApiKey : s.qbitApiKey;
   if (!baseUrl) return c.json({ error: "请先填写 WebUI 地址" }, 400);
+  if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
   try {
-    const version = await new QbitClient({ baseUrl, username, password }).appVersion();
+    const version = await new QbitClient({ baseUrl, apiKey }).appVersion();
     return c.json({ ok: true, message: `连接成功，qBittorrent ${version}` });
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);

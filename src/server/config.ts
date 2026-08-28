@@ -17,8 +17,7 @@ export const settingsSchema = z.object({
   mtApiKey: z.string().default(process.env.MT_API_KEY ?? ""),
   mtBaseUrl: z.string().default(process.env.MT_BASE_URL ?? "https://api.m-team.cc/api"),
   qbitUrl: z.string().default(process.env.QBIT_URL ?? ""),
-  qbitUser: z.string().default(process.env.QBIT_USER ?? ""),
-  qbitPass: z.string().default(process.env.QBIT_PASS ?? ""),
+  qbitApiKey: z.string().default(process.env.QBIT_API_KEY ?? ""),
 
   // 受管分类
   managedCategories: z.array(z.string()).default(["pt-watcher"]),

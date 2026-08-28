@@ -28,10 +28,10 @@
 
 其余配置全部存 Postgres `settings` 表，通过 Web UI「设置」页修改：
 
-- **连接配置**：M-Team API key（控制台 → 实验室 → 存取令牌）与 API 地址、qBittorrent WebUI 地址/账号/密码，保存后立即生效无需重启
+- **连接配置**：M-Team API key（控制台 → 实验室 → 存取令牌）与 API 地址、qBittorrent WebUI 地址与 API key（需 qBittorrent ≥ 5.2，在 WebUI 设置中生成，形如 `qbt_...`），保存后立即生效无需重启
 - **行为配置**：阈值、间隔、受管分类、评分权重等
 
-兼容迁移：settings 表中尚无对应值时，`MT_API_KEY` / `MT_BASE_URL` / `QBIT_URL` / `QBIT_USER` / `QBIT_PASS` 环境变量会作为初始默认值被读入（首次保存后即以 UI 中的值为准）。
+兼容迁移：settings 表中尚无对应值时，`MT_API_KEY` / `MT_BASE_URL` / `QBIT_URL` / `QBIT_API_KEY` 环境变量会作为初始默认值被读入（首次保存后即以 UI 中的值为准）。
 
 ### K8s 要点
 
