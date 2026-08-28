@@ -66,6 +66,7 @@ export interface Status {
   mteam: { configured: boolean };
   freeSpaceBytes: number | null;
   freeSpaceThresholdBytes: number;
+  diskTotalBytes: number | null;
   jobs: JobStatus[];
 }
 
