@@ -95,8 +95,7 @@ const GROUPS: { title: string; fields: FieldDef[] }[] = [
       { key: "mtApiKey", label: "M-Team API Key（控制台 → 实验室 → 存取令牌）", type: "password" },
       { key: "mtBaseUrl", label: "M-Team API 地址", type: "text" },
       { key: "qbitUrl", label: "qBittorrent WebUI 地址（如 http://qbittorrent:8080）", type: "text" },
-      { key: "qbitUser", label: "qBittorrent 用户名", type: "text" },
-      { key: "qbitPass", label: "qBittorrent 密码", type: "password" },
+      { key: "qbitApiKey", label: "qBittorrent API Key（需 qBittorrent ≥ 5.2，WebUI 设置中生成，形如 qbt_...）", type: "password" },
     ],
   },
   {
