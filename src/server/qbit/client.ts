@@ -20,43 +20,28 @@ export interface QbitTorrentInfo {
 
 export class QbitClient {
   private baseUrl: string;
-  private cookie = "";
+  private apiKey: string;
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl = env.qbitUrl) {
+  constructor(baseUrl = env.qbitUrl, apiKey = env.qbitApiKey) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.apiKey = apiKey;
   }
 
   get configured(): boolean {
-    return Boolean(this.baseUrl);
+    return Boolean(this.baseUrl && this.apiKey);
   }
 
-  private async login(): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/api/v2/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: env.qbitUser, password: env.qbitPass }).toString(),
-    });
-    const text = await res.text();
-    if (!res.ok || text.trim() !== "Ok.") {
-      throw new Error(`qBittorrent login failed: HTTP ${res.status} ${text.slice(0, 100)}`);
-    }
-    const setCookie = res.headers.get("set-cookie") ?? "";
-    const m = setCookie.match(/SID=[^;]+/);
-    if (!m) throw new Error("qBittorrent login: no SID cookie");
-    this.cookie = m[0];
-  }
-
-  private async request(path: string, init: RequestInit = {}, retryAuth = true): Promise<Response> {
+  /** qBit >= 5.2 的 API key 认证：Authorization: Bearer，无状态无 cookie */
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
     if (!this.baseUrl) throw new Error("QBIT_URL not configured");
-    if (!this.cookie) await this.login();
+    if (!this.apiKey) throw new Error("QBIT_API_KEY not configured");
     const res = await fetch(`${this.baseUrl}/api/v2${path}`, {
       ...init,
-      headers: { Cookie: this.cookie, ...(init.headers as Record<string, string>) },
+      headers: { Authorization: `Bearer ${this.apiKey}`, ...(init.headers as Record<string, string>) },
     });
-    if (res.status === 403 && retryAuth) {
-      this.cookie = "";
-      return this.request(path, init, false);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`qBittorrent ${path}: HTTP ${res.status} (API key 无效或已轮换)`);
     }
     if (!res.ok) throw new Error(`qBittorrent ${path}: HTTP ${res.status}`);
     return res;

@@ -17,8 +17,7 @@ services:
       DATABASE_URL: postgres://ptwatcher:ptwatcher@postgres:5432/ptwatcher
       MT_API_KEY: ${MT_API_KEY:-}
       QBIT_URL: ${QBIT_URL:-}
-      QBIT_USER: ${QBIT_USER:-}
-      QBIT_PASS: ${QBIT_PASS:-}
+      QBIT_API_KEY: ${QBIT_API_KEY:-}
     ports:
       - "3000:3000"
     depends_on:

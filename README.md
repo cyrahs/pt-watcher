@@ -27,7 +27,7 @@
 | `MT_API_KEY` | M-Team API key（控制台 → 实验室 → 存取令牌） |
 | `MT_BASE_URL` | 可选，默认 `https://api.m-team.cc/api` |
 | `QBIT_URL` | qBittorrent WebUI 地址，如 `http://qbittorrent:8080` |
-| `QBIT_USER` / `QBIT_PASS` | qBittorrent WebUI 账号密码 |
+| `QBIT_API_KEY` | qBittorrent WebUI API key（需 qBittorrent ≥ 5.2，在 WebUI 设置中生成，形如 `qbt_...`） |
 | `PORT` | 可选，默认 3000 |
 
 行为配置（阈值、间隔、受管分类、评分权重等）存 Postgres `settings` 表，通过 Web UI 修改，启动时自动写入默认值。

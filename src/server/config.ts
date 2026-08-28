@@ -9,8 +9,7 @@ export const env = {
   mtApiKey: process.env.MT_API_KEY ?? "",
   mtBaseUrl: process.env.MT_BASE_URL ?? "https://api.m-team.cc/api",
   qbitUrl: (process.env.QBIT_URL ?? "").replace(/\/+$/, ""),
-  qbitUser: process.env.QBIT_USER ?? "",
-  qbitPass: process.env.QBIT_PASS ?? "",
+  qbitApiKey: process.env.QBIT_API_KEY ?? "",
   port: Number(process.env.PORT ?? 3000),
 };
 
