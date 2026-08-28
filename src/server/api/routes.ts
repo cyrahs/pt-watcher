@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { ZodError } from "zod";
 import { desc, eq, gte, sql } from "drizzle-orm";
 import { db, schema } from "../db";
-import { qbit } from "../qbit/client";
+import { qbit, QbitClient } from "../qbit/client";
 import { getSettings, saveSettings } from "../config";
+import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
 import type { PtCategory, SiteUserStats } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
@@ -75,33 +76,6 @@ api.post("/torrents/:id/:action", async (c) => {
         .where(eq(schema.torrents.id, id));
       await logEvent("manual_delete", `手动删除: ${row.name}`, { torrentRef: row.infoHash });
       break;
-    case "untrack":
-      await db
-        .update(schema.torrents)
-        .set({ state: "untracked", untrackedAt: new Date() })
-        .where(eq(schema.torrents.id, id));
-      await logEvent("untracked", `手动脱管: ${row.name}`, { torrentRef: row.infoHash });
-      break;
-    case "retrack": {
-      if (row.state !== "untracked") return c.json({ error: "not untracked" }, 400);
-      const infos = await qbit.torrentsInfo({ hashes: [row.infoHash] });
-      const q = infos[0];
-      if (!q) return c.json({ error: "torrent not in qBittorrent" }, 404);
-      const managed = new Set(getSettings().managedCategories);
-      if (!managed.has(q.category)) {
-        return c.json({ error: `分类 [${q.category}] 不在受管列表，请先移回受管分类` }, 400);
-      }
-      await db
-        .update(schema.torrents)
-        .set({
-          state: q.progress >= 1 ? "completed" : "downloading",
-          category: q.category,
-          untrackedAt: null,
-        })
-        .where(eq(schema.torrents.id, id));
-      await logEvent("retracked", `手动重新纳管: ${row.name}`, { torrentRef: row.infoHash });
-      break;
-    }
     default:
       return c.json({ error: "unknown action" }, 400);
   }
@@ -192,6 +166,37 @@ api.put("/settings", async (c) => {
       return c.json({ error: msg }, 400);
     }
     return c.json({ error: String(e) }, 400);
+  }
+});
+
+// 连接测试：用请求体里的表单当前值（可未保存），缺省回退到已保存配置
+api.post("/test/mteam", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const s = getSettings();
+  const apiKey = typeof body.mtApiKey === "string" ? body.mtApiKey : s.mtApiKey;
+  const baseUrl =
+    typeof body.mtBaseUrl === "string" && body.mtBaseUrl ? body.mtBaseUrl : s.mtBaseUrl;
+  if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
+  try {
+    const username = await new MTeamAdapter({ apiKey, baseUrl }).testConnection();
+    return c.json({ ok: true, message: `连接成功，账号: ${username}` });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+api.post("/test/qbit", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const s = getSettings();
+  const baseUrl = typeof body.qbitUrl === "string" && body.qbitUrl ? body.qbitUrl : s.qbitUrl;
+  const apiKey = typeof body.qbitApiKey === "string" ? body.qbitApiKey : s.qbitApiKey;
+  if (!baseUrl) return c.json({ error: "请先填写 WebUI 地址" }, 400);
+  if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
+  try {
+    const version = await new QbitClient({ baseUrl, apiKey }).appVersion();
+    return c.json({ ok: true, message: `连接成功，qBittorrent ${version}` });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }
 });
 

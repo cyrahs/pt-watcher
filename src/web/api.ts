@@ -94,6 +94,12 @@ export const api = {
   runJob: (name: string) => request<{ ok: boolean }>(`/jobs/${name}/run`, { method: "POST" }),
   trafficStats: (days = 30) => request<TrafficStats>(`/stats/traffic?days=${days}`),
   siteStats: () => request<SiteUserStats[]>("/stats/site"),
+  testConnection: (target: "mteam" | "qbit", values: Record<string, unknown>) =>
+    request<{ ok: boolean; message: string }>(`/test/${target}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(values),
+    }),
   ptCategories: () => request<PtCategory[]>("/pt/categories"),
 };
 

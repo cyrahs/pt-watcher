@@ -162,6 +162,16 @@ export class MTeamAdapter implements PtAdapter {
     return data?.data ?? [];
   }
 
+  /** 验证 API Key 是否可用，返回账号用户名 */
+  async testConnection(): Promise<string> {
+    const data = await this.request<{ username?: string }>(
+      "/member/profile",
+      { method: "POST" },
+      0,
+    );
+    return data?.username ?? "ok";
+  }
+
   async listCategories(): Promise<PtCategory[]> {
     if (this.categoryCache && Date.now() - this.categoryCache.at < 3600_000) {
       return this.categoryCache.list;

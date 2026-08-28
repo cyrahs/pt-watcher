@@ -88,15 +88,21 @@ function CategoryPicker({
   );
 }
 
-const GROUPS: { title: string; fields: FieldDef[] }[] = [
+const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] = [
   {
-    title: "连接配置",
+    title: "M-Team 连接",
+    test: "mteam",
     fields: [
-      { key: "mtApiKey", label: "M-Team API Key（控制台 → 实验室 → 存取令牌）", type: "password" },
-      { key: "mtBaseUrl", label: "M-Team API 地址", type: "text" },
-      { key: "qbitUrl", label: "qBittorrent WebUI 地址（如 http://qbittorrent:8080）", type: "text" },
-      { key: "qbitUser", label: "qBittorrent 用户名", type: "text" },
-      { key: "qbitPass", label: "qBittorrent 密码", type: "password" },
+      { key: "mtApiKey", label: "API Key（控制台 → 实验室 → 存取令牌）", type: "password" },
+      { key: "mtBaseUrl", label: "API 地址", type: "text" },
+    ],
+  },
+  {
+    title: "qBittorrent 连接",
+    test: "qbit",
+    fields: [
+      { key: "qbitUrl", label: "WebUI 地址（如 http://qbittorrent:8080）", type: "text" },
+      { key: "qbitApiKey", label: "API Key（需 qBittorrent ≥ 5.2，WebUI 设置中生成，形如 qbt_...）", type: "password" },
     ],
   },
   {
@@ -155,10 +161,13 @@ const GROUPS: { title: string; fields: FieldDef[] }[] = [
   },
 ];
 
+type TestState = { status: "loading" } | { status: "ok" | "fail"; text: string };
+
 export function Settings() {
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [tests, setTests] = useState<Record<string, TestState>>({});
 
   useEffect(() => {
     api.settings().then(setValues).catch((e) => setError(String(e)));
@@ -167,6 +176,23 @@ export function Settings() {
   if (!values) return <div className="muted">{error || "加载中…"}</div>;
 
   const set = (key: string, v: unknown) => setValues({ ...values, [key]: v });
+
+  const runTest = async (target: "mteam" | "qbit") => {
+    setTests((t) => ({ ...t, [target]: { status: "loading" } }));
+    const payload =
+      target === "mteam"
+        ? { mtApiKey: values.mtApiKey, mtBaseUrl: values.mtBaseUrl }
+        : { qbitUrl: values.qbitUrl, qbitApiKey: values.qbitApiKey };
+    try {
+      const res = await api.testConnection(target, payload);
+      setTests((t) => ({ ...t, [target]: { status: "ok", text: res.message } }));
+    } catch (e) {
+      setTests((t) => ({
+        ...t,
+        [target]: { status: "fail", text: e instanceof Error ? e.message : String(e) },
+      }));
+    }
+  };
 
   const save = async () => {
     setMessage("");
@@ -243,6 +269,26 @@ export function Settings() {
                 );
               })}
             </div>
+            {g.test && (
+              <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 12 }}>
+                <button
+                  className="action"
+                  onClick={() => runTest(g.test!)}
+                  disabled={tests[g.test]?.status === "loading"}
+                >
+                  {tests[g.test]?.status === "loading" ? "测试中…" : "测试连接"}
+                </button>
+                {(() => {
+                  const t = tests[g.test];
+                  if (!t || t.status === "loading") return null;
+                  return (
+                    <span style={{ color: t.status === "ok" ? "var(--good)" : "var(--bad)" }}>
+                      {t.text}
+                    </span>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         </div>
       ))}

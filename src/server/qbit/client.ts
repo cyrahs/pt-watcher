@@ -19,57 +19,48 @@ export interface QbitTorrentInfo {
   state: string;
 }
 
+export interface QbitCredentials {
+  baseUrl: string;
+  apiKey: string;
+}
+
 export class QbitClient {
-  private baseUrlOverride: string | null;
-  private cookie = "";
+  private overrides: Partial<QbitCredentials>;
   private stopVerb: "stop" | "pause" | null = null;
 
-  constructor(baseUrl?: string) {
-    this.baseUrlOverride = baseUrl ?? null;
+  /** 不传 overrides 时凭据实时取自 settings；传入则用于临时连接（如测试） */
+  constructor(overrides: Partial<QbitCredentials> = {}) {
+    this.overrides = overrides;
   }
 
   /** settings 每次读取，UI 修改后无需重启即生效 */
   private get baseUrl(): string {
-    return (this.baseUrlOverride ?? getSettings().qbitUrl).replace(/\/+$/, "");
+    return (this.overrides.baseUrl ?? getSettings().qbitUrl).replace(/\/+$/, "");
+  }
+
+  private get apiKey(): string {
+    return this.overrides.apiKey ?? getSettings().qbitApiKey;
   }
 
   get configured(): boolean {
-    return Boolean(this.baseUrl);
+    return Boolean(this.baseUrl && this.apiKey);
   }
 
-  /** 连接配置变更后调用，丢弃旧会话与版本探测结果 */
+  /** 连接配置变更后调用，丢弃版本探测结果 */
   resetConnection(): void {
-    this.cookie = "";
     this.stopVerb = null;
   }
 
-  private async login(): Promise<void> {
-    const s = getSettings();
-    const res = await fetch(`${this.baseUrl}/api/v2/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ username: s.qbitUser, password: s.qbitPass }).toString(),
-    });
-    const text = await res.text();
-    if (!res.ok || text.trim() !== "Ok.") {
-      throw new Error(`qBittorrent login failed: HTTP ${res.status} ${text.slice(0, 100)}`);
-    }
-    const setCookie = res.headers.get("set-cookie") ?? "";
-    const m = setCookie.match(/SID=[^;]+/);
-    if (!m) throw new Error("qBittorrent login: no SID cookie");
-    this.cookie = m[0];
-  }
-
-  private async request(path: string, init: RequestInit = {}, retryAuth = true): Promise<Response> {
+  /** qBit >= 5.2 的 API key 认证：Authorization: Bearer，无状态无 cookie */
+  private async request(path: string, init: RequestInit = {}): Promise<Response> {
     if (!this.baseUrl) throw new Error("qBittorrent 未配置（请在设置页填写 WebUI 地址）");
-    if (!this.cookie) await this.login();
+    if (!this.apiKey) throw new Error("qBittorrent 未配置 API key（请在设置页填写，需 qBittorrent ≥ 5.2）");
     const res = await fetch(`${this.baseUrl}/api/v2${path}`, {
       ...init,
-      headers: { Cookie: this.cookie, ...(init.headers as Record<string, string>) },
+      headers: { Authorization: `Bearer ${this.apiKey}`, ...(init.headers as Record<string, string>) },
     });
-    if (res.status === 403 && retryAuth) {
-      this.cookie = "";
-      return this.request(path, init, false);
+    if (res.status === 401 || res.status === 403) {
+      throw new Error(`qBittorrent ${path}: HTTP ${res.status} (API key 无效或已轮换)`);
     }
     if (!res.ok) throw new Error(`qBittorrent ${path}: HTTP ${res.status}`);
     return res;
@@ -85,6 +76,11 @@ export class QbitClient {
 
   async webApiVersion(): Promise<string> {
     const res = await this.request("/app/webapiVersion");
+    return res.text();
+  }
+
+  async appVersion(): Promise<string> {
+    const res = await this.request("/app/version");
     return res.text();
   }
 
