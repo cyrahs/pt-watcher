@@ -80,11 +80,15 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; }
 .card .big {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   min-height: 30px;
   font-size: 22px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+.card .big > span { white-space: nowrap; }
+.card .big .updown { display: inline-flex; align-items: center; gap: 12px; }
 .card .big .badge { font-size: 14px; padding: 3px 10px; font-weight: 600; }
 .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 15px; }
 
