@@ -99,7 +99,7 @@ export function Dashboard() {
                 <th>状态</th>
                 <th>上次运行</th>
                 <th>错误</th>
-                <th></th>
+                <th className="actions">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -114,8 +114,10 @@ export function Dashboard() {
                     )}
                   </td>
                   <td>{formatRelative(j.lastRunAt)}</td>
-                  <td style={{ color: "var(--bad)" }}>{j.lastError ?? ""}</td>
-                  <td>
+                  <td className="err" title={j.lastError ?? undefined}>
+                    {j.lastError ?? ""}
+                  </td>
+                  <td className="actions">
                     <button
                       className="action"
                       onClick={() => api.runJob(j.name).then(() => setTimeout(load, 500))}

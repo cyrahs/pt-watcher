@@ -88,13 +88,13 @@ export function Torrents() {
               <th>名称</th>
               <th>来源</th>
               <th>状态</th>
-              <th>大小</th>
+              <th className="num">大小</th>
               <th>进度</th>
-              <th>free 剩余</th>
-              <th>评分</th>
-              <th>分享率</th>
+              <th className="num">free 剩余</th>
+              <th className="num">评分</th>
+              <th className="num">分享率</th>
               <th>分类</th>
-              <th>操作</th>
+              <th className="actions">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -116,17 +116,17 @@ export function Torrents() {
                   <td>
                     <span className={`badge ${st.cls}`}>{st.label}</span>
                   </td>
-                  <td>{formatBytes(t.sizeBytes)}</td>
+                  <td className="num">{formatBytes(t.sizeBytes)}</td>
                   <td>
                     <div className="progress" title={`${(t.progress * 100).toFixed(1)}%`}>
                       <div style={{ width: `${t.progress * 100}%` }} />
                     </div>
                   </td>
-                  <td>{freeRemaining(t)}</td>
-                  <td>{isActive ? t.score.toFixed(3) : "-"}</td>
-                  <td>{t.ratio.toFixed(2)}</td>
+                  <td className="num">{freeRemaining(t)}</td>
+                  <td className="num">{isActive ? t.score.toFixed(3) : "-"}</td>
+                  <td className="num">{t.ratio.toFixed(2)}</td>
                   <td>{t.category}</td>
-                  <td>
+                  <td className="actions">
                     {isActive && (
                       <>
                         {t.state === "stopped_free_expired" || t.state === "downloading" ? (
@@ -154,7 +154,7 @@ export function Torrents() {
             })}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={10} className="muted">
+                <td colSpan={10} className="muted empty">
                   暂无数据
                 </td>
               </tr>
