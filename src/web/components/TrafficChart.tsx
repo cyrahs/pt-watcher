@@ -5,6 +5,27 @@ const W = 860;
 const H = 220;
 const MARGIN = { top: 10, right: 8, bottom: 22, left: 56 };
 
+const SERIES_STORE_KEY = "trafficChart.series";
+
+interface SeriesVisible {
+  up: boolean;
+  down: boolean;
+}
+
+function loadSeriesVisible(): SeriesVisible {
+  try {
+    const raw = localStorage.getItem(SERIES_STORE_KEY);
+    if (raw) {
+      const v = JSON.parse(raw) as Partial<SeriesVisible>;
+      const up = v.up !== false;
+      const down = v.down !== false;
+      // 两个都关等于没图，回退为全开
+      if (up || down) return { up, down };
+    }
+  } catch {}
+  return { up: true, down: true };
+}
+
 /** 补齐缺失日期（无流量的天数据库里没有行） */
 function fillDays(daily: TrafficDay[], days: number): TrafficDay[] {
   const byDay = new Map(daily.map((d) => [d.day, d]));
@@ -34,51 +55,55 @@ function niceMax(v: number): number {
 
 export function TrafficChart({ daily, days }: { daily: TrafficDay[]; days: number }) {
   const [hover, setHover] = useState<number | null>(null);
-  const [view, setView] = useState<"chart" | "table">("chart");
+  const [visible, setVisible] = useState<SeriesVisible>(loadSeriesVisible);
+
+  const toggle = (key: keyof SeriesVisible) => {
+    setVisible((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      // 至少保留一个系列可见
+      if (!next.up && !next.down) return prev;
+      try {
+        localStorage.setItem(SERIES_STORE_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
 
   const data = useMemo(() => fillDays(daily, days), [daily, days]);
-  const max = niceMax(Math.max(...data.map((d) => Math.max(d.uploadedBytes, d.downloadedBytes))));
+  // y 轴只按勾选的系列缩放：下载往往远大于上传，隐藏下载后上传不再被压成一条线
+  const max = niceMax(
+    Math.max(
+      ...data.map((d) =>
+        Math.max(visible.up ? d.uploadedBytes : 0, visible.down ? d.downloadedBytes : 0),
+      ),
+    ),
+  );
 
+  const seriesCount = (visible.up ? 1 : 0) + (visible.down ? 1 : 0);
   const plotW = W - MARGIN.left - MARGIN.right;
   const plotH = H - MARGIN.top - MARGIN.bottom;
   const slot = plotW / data.length;
-  const barW = Math.max(2, (slot - 6) / 2);
+  const barW = Math.max(2, (slot - 6) / Math.max(seriesCount, 1));
+  const groupW = barW * seriesCount + (seriesCount - 1) * 2;
   const yOf = (v: number) => MARGIN.top + plotH * (1 - v / max);
   const labelEvery = Math.ceil(data.length / 6);
-
-  if (view === "table") {
-    return (
-      <>
-        <ChartHeader view={view} setView={setView} />
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>日期</th>
-                <th>上传</th>
-                <th>下载</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...data].reverse().map((d) => (
-                <tr key={d.day}>
-                  <td>{d.day}</td>
-                  <td>{formatBytes(d.uploadedBytes)}</td>
-                  <td>{formatBytes(d.downloadedBytes)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </>
-    );
-  }
 
   const hovered = hover != null ? data[hover] : null;
 
   return (
     <>
-      <ChartHeader view={view} setView={setView} />
+      <div className="chart-header">
+        <div className="chart-series-picker">
+          <label>
+            <input type="checkbox" checked={visible.up} onChange={() => toggle("up")} />
+            <span className="dot up" /> 上传
+          </label>
+          <label>
+            <input type="checkbox" checked={visible.down} onChange={() => toggle("down")} />
+            <span className="dot down" /> 下载
+          </label>
+        </div>
+      </div>
       <div className="chart-wrap" onMouseLeave={() => setHover(null)}>
         <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`近${days}天每日上传/下载流量柱状图`}>
           {/* 网格与 y 轴刻度 */}
@@ -96,13 +121,31 @@ export function TrafficChart({ daily, days }: { daily: TrafficDay[]; days: numbe
           })}
           {/* 柱 */}
           {data.map((d, i) => {
-            const x0 = MARGIN.left + i * slot + (slot - barW * 2 - 2) / 2;
-            const upH = (d.uploadedBytes / max) * plotH;
-            const downH = (d.downloadedBytes / max) * plotH;
+            const x0 = MARGIN.left + i * slot + (slot - groupW) / 2;
+            let x = x0;
+            const bars = [];
+            if (visible.up) {
+              bars.push(
+                <path
+                  key="up"
+                  d={barPath(x, yOf(d.uploadedBytes), barW, (d.uploadedBytes / max) * plotH)}
+                  className="bar-up"
+                />,
+              );
+              x += barW + 2;
+            }
+            if (visible.down) {
+              bars.push(
+                <path
+                  key="down"
+                  d={barPath(x, yOf(d.downloadedBytes), barW, (d.downloadedBytes / max) * plotH)}
+                  className="bar-down"
+                />,
+              );
+            }
             return (
               <g key={d.day} opacity={hover == null || hover === i ? 1 : 0.45}>
-                <path d={barPath(x0, yOf(d.uploadedBytes), barW, upH)} className="bar-up" />
-                <path d={barPath(x0 + barW + 2, yOf(d.downloadedBytes), barW, downH)} className="bar-down" />
+                {bars}
               </g>
             );
           })}
@@ -143,44 +186,19 @@ export function TrafficChart({ daily, days }: { daily: TrafficDay[]; days: numbe
             }}
           >
             <div className="muted">{hovered.day}</div>
-            <div>
-              <span className="dot up" /> 上传 {formatBytes(hovered.uploadedBytes)}
-            </div>
-            <div>
-              <span className="dot down" /> 下载 {formatBytes(hovered.downloadedBytes)}
-            </div>
+            {visible.up && (
+              <div>
+                <span className="dot up" /> 上传 {formatBytes(hovered.uploadedBytes)}
+              </div>
+            )}
+            {visible.down && (
+              <div>
+                <span className="dot down" /> 下载 {formatBytes(hovered.downloadedBytes)}
+              </div>
+            )}
           </div>
         )}
       </div>
     </>
-  );
-}
-
-function ChartHeader({
-  view,
-  setView,
-}: {
-  view: "chart" | "table";
-  setView: (v: "chart" | "table") => void;
-}) {
-  return (
-    <div className="chart-header">
-      <div className="chart-legend">
-        <span>
-          <span className="dot up" /> 上传
-        </span>
-        <span>
-          <span className="dot down" /> 下载
-        </span>
-      </div>
-      <div className="filters" style={{ margin: 0 }}>
-        <button className={view === "chart" ? "active" : ""} onClick={() => setView("chart")}>
-          图表
-        </button>
-        <button className={view === "table" ? "active" : ""} onClick={() => setView("table")}>
-          表格
-        </button>
-      </div>
-    </div>
   );
 }
