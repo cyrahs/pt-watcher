@@ -36,12 +36,17 @@ body {
 }
 
 .topbar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+/* 与 main 相同的居中约束，让顶栏内容和页面内容左右对齐 */
+.topbar-inner {
   display: flex;
   align-items: center;
   gap: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
   padding: 10px 20px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
 }
 .topbar .logo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; }
 .topbar .logo img { width: 26px; height: 26px; }
@@ -67,18 +72,32 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; }
   padding: 14px 16px;
 }
 .card h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); font-weight: 500; }
-.card .big { font-size: 22px; font-weight: 700; }
-.card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.card .big {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.card .big .badge { font-size: 14px; padding: 3px 10px; font-weight: 600; }
+.card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 15px; }
 
 .section { margin-top: 24px; }
 .section h2 { font-size: 16px; margin: 0 0 10px; }
 
 .table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
-table { border-collapse: collapse; width: 100%; }
-th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: middle; }
 th { color: var(--muted); font-weight: 500; font-size: 12px; }
 tr:last-child td { border-bottom: none; }
-td.name { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名称列吃掉剩余宽度并截断，其余列收缩到内容宽度，避免横向滚动 */
+td.name { width: 100%; max-width: 0; min-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+th.num, td.num { text-align: right; }
+th.actions, td.actions { text-align: right; }
+td.actions .action { margin: 0 0 0 6px; }
+td.err { width: 100%; max-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--bad); }
+td.empty { text-align: center; padding: 24px 12px; }
 
 .badge {
   display: inline-block;
@@ -131,9 +150,12 @@ button.primary {
 .filters button.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+/* 标签换行时把输入框推到底部，同一行的输入框保持对齐 */
+.field { display: flex; flex-direction: column; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .field input, .field select {
   width: 100%;
+  margin-top: auto;
   padding: 7px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -141,9 +163,15 @@ button.primary {
   color: var(--text);
   font-size: 14px;
 }
-.field.checkbox { display: flex; align-items: center; gap: 8px; }
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  min-height: 33px;
+}
 .field.checkbox label { margin: 0; font-size: 14px; color: var(--text); }
-.field.checkbox input { width: auto; }
+.field.checkbox input { width: auto; margin-top: 0; flex-shrink: 0; }
 
 .event-row .msg { white-space: normal; }
 .error-banner {

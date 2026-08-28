@@ -45,7 +45,7 @@ export function EventTable({ events }: { events: EventRow[] }) {
           ))}
           {events.length === 0 && (
             <tr>
-              <td colSpan={3} className="muted">
+              <td colSpan={3} className="muted empty">
                 暂无事件
               </td>
             </tr>

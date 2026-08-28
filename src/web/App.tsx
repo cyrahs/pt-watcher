@@ -17,21 +17,23 @@ export function App() {
   return (
     <>
       <header className="topbar">
-        <div className="logo">
-          <img src="/favicon.svg" alt="" />
-          pt-watcher
+        <div className="topbar-inner">
+          <div className="logo">
+            <img src="/favicon.svg" alt="" />
+            pt-watcher
+          </div>
+          <nav>
+            {PAGES.map((p) => (
+              <button
+                key={p.key}
+                className={page === p.key ? "active" : ""}
+                onClick={() => setPage(p.key)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </nav>
         </div>
-        <nav>
-          {PAGES.map((p) => (
-            <button
-              key={p.key}
-              className={page === p.key ? "active" : ""}
-              onClick={() => setPage(p.key)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </nav>
       </header>
       <main>
         <Current />
