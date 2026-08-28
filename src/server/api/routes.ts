@@ -19,22 +19,30 @@ api.onError((err, c) => {
 });
 
 api.get("/status", async (c) => {
+  const s = getSettings();
   let freeSpace: number | null = null;
+  let managedUsed: number | null = null;
   let qbitOk = false;
   if (qbit.configured) {
     try {
       freeSpace = await qbit.freeSpaceOnDisk();
+      // 受管种子已占用的磁盘空间（已下载的选中字节数）
+      const infos = await Promise.all(
+        s.managedCategories.map((cat) => qbit.torrentsInfo({ category: cat })),
+      );
+      managedUsed = infos.flat().reduce((sum, t) => sum + Math.max(t.size - t.amount_left, 0), 0);
       qbitOk = true;
     } catch {
       qbitOk = false;
     }
   }
-  const s = getSettings();
   return c.json({
     qbit: { configured: qbit.configured, connected: qbitOk, url: s.qbitUrl },
     mteam: { configured: Boolean(s.mtApiKey) },
     freeSpaceBytes: freeSpace,
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,
+    // pt-watcher 视角的可支配容量：剩余空间 + 受管种子已占用
+    diskTotalBytes: freeSpace != null && managedUsed != null ? freeSpace + managedUsed : null,
     jobs: jobStatuses(),
   });
 });

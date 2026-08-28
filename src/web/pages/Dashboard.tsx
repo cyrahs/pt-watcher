@@ -48,6 +48,8 @@ export function Dashboard() {
   const free = status?.freeSpaceBytes ?? null;
   const threshold = status?.freeSpaceThresholdBytes ?? 0;
   const spaceOk = free != null && free >= threshold;
+  const total = status?.diskTotalBytes ?? null;
+  const usedRatio = free != null && total != null && total > 0 ? Math.min(Math.max(1 - free / total, 0), 1) : null;
 
   const today = traffic?.daily.find((d) => d.day === localDayKey());
   const mt = siteStats.find((s) => s.siteId === "mteam") ?? null;
@@ -60,12 +62,17 @@ export function Dashboard() {
           <h3>磁盘剩余空间</h3>
           <div className="big" style={{ color: spaceOk ? "var(--good)" : "var(--bad)" }}>
             {formatBytes(free)}
+            {total != null && (
+              <span style={{ color: "var(--muted)", fontWeight: 400 }}>{` / ${formatBytes(total)}`}</span>
+            )}
           </div>
-          <div className="sub">清理阈值 {formatBytes(threshold)}</div>
+          <div className="sub">
+            {usedRatio != null ? `受管种子已用 ${(usedRatio * 100).toFixed(0)}%` : ""}
+          </div>
           <div className="gauge">
             <div
               style={{
-                width: free != null ? `${Math.min((free / (threshold * 2)) * 100, 100)}%` : "0%",
+                width: usedRatio != null ? `${usedRatio * 100}%` : "0%",
                 background: spaceOk ? "var(--good)" : "var(--bad)",
               }}
             />
@@ -93,8 +100,10 @@ export function Dashboard() {
               "…"
             )}
           </div>
-          <div className="sub">{status?.qbit.url || "请在设置页填写 WebUI 地址"}</div>
+          <div className="sub">{status && !status.qbit.configured ? "请在设置页填写 WebUI 地址" : ""}</div>
         </div>
+      </div>
+      <div className="cards">
         <div className="card">
           <h3>累计流量（pt-watcher 受管种子）</h3>
           <div className="big">
@@ -130,9 +139,7 @@ export function Dashboard() {
                   </span>
                 </span>
               </div>
-              <div className="sub">
-                {mt.bonus != null ? `魔力 ${Math.round(mt.bonus).toLocaleString()}` : ""}
-              </div>
+              <div className="sub" />
             </>
           ) : (
             <>

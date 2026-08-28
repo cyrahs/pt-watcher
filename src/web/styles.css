@@ -70,6 +70,7 @@ body {
 main { max-width: 1200px; margin: 0 auto; padding: 20px; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.cards + .cards { margin-top: 12px; }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -195,8 +196,10 @@ button.primary {
 .muted { color: var(--muted); }
 
 /* 流量图 */
-.chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.chart-legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.chart-header { display: flex; justify-content: flex-end; align-items: center; margin-bottom: 8px; }
+.chart-series-picker { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.chart-series-picker label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+.chart-series-picker input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
 .dot.up { background: var(--chart-up); }
 .dot.down { background: var(--chart-down); }
