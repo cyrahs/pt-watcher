@@ -13,6 +13,7 @@ export function getAdapters(): PtAdapter[] {
         apiKey: env.mtApiKey,
         baseUrl: env.mtBaseUrl,
         modes: getSettings().searchModes,
+        categories: getSettings().searchCategories,
       }),
     );
   }

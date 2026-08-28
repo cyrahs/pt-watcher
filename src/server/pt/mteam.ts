@@ -1,12 +1,32 @@
-import type { FreeTorrent, PtAdapter } from "./types";
+import type { FreeTorrent, PtAdapter, PtCategory } from "./types";
 
 export interface MTeamOptions {
   apiKey: string;
   baseUrl?: string;
-  /** search 的 mode 列表，如 ["normal"] 或 ["movie", "tvshow"] */
+  /** search 的 mode 列表，如 ["normal"] 或 ["movie", "tvshow"]；配置了 categories 时忽略 */
   modes?: string[];
+  /** 只搜索这些分类 id（叶子分类），mode 按分类归属自动推导 */
+  categories?: string[];
   pageSize?: number;
 }
+
+interface MtCategoryEntry {
+  id: string | number;
+  nameChs?: string;
+  nameCht?: string;
+  nameEng?: string;
+  parent?: string | number | null;
+}
+
+interface MtCategoryList {
+  list?: MtCategoryEntry[];
+  [group: string]: unknown;
+}
+
+/** categoryList 响应里 mode 分组的 key（waterfall 是全集视图，排除） */
+const CATEGORY_GROUPS = ["adult", "movie", "music", "tvshow", "anime"] as const;
+/** search API 支持的 mode；分组不在其中的（如 anime）归入 normal 模式搜索 */
+const SEARCH_MODES = new Set(["normal", "adult", "movie", "music", "tvshow"]);
 
 interface MtStatus {
   discount?: string;
@@ -61,13 +81,16 @@ export class MTeamAdapter implements PtAdapter {
   private baseUrl: string;
   private apiKey: string;
   private modes: string[];
+  private categories: string[];
   private pageSize: number;
   private lastRequestAt = 0;
+  private categoryCache: { at: number; list: PtCategory[] } | null = null;
 
   constructor(opts: MTeamOptions) {
     this.apiKey = opts.apiKey;
     this.baseUrl = (opts.baseUrl ?? "https://api.m-team.cc/api").replace(/\/+$/, "");
     this.modes = opts.modes?.length ? opts.modes : ["normal"];
+    this.categories = opts.categories ?? [];
     this.pageSize = opts.pageSize ?? 100;
   }
 
@@ -128,26 +151,66 @@ export class MTeamAdapter implements PtAdapter {
     return data?.data ?? [];
   }
 
+  async listCategories(): Promise<PtCategory[]> {
+    if (this.categoryCache && Date.now() - this.categoryCache.at < 3600_000) {
+      return this.categoryCache.list;
+    }
+    const data = await this.request<MtCategoryList>("/torrent/categoryList", { method: "POST" });
+    const entries = data?.list ?? [];
+    const parentIds = new Set(entries.map((e) => String(e.parent ?? "")).filter(Boolean));
+    const groupOf = new Map<string, string>();
+    for (const group of CATEGORY_GROUPS) {
+      for (const id of (data?.[group] as (string | number)[] | undefined) ?? []) {
+        groupOf.set(String(id), group);
+      }
+    }
+    const list = entries
+      .filter((e) => !parentIds.has(String(e.id))) // 只保留叶子分类
+      .map((e) => ({
+        siteId: this.siteId,
+        id: String(e.id),
+        name: e.nameChs || e.nameCht || e.nameEng || String(e.id),
+        group: groupOf.get(String(e.id)) ?? "normal",
+      }));
+    this.categoryCache = { at: Date.now(), list };
+    return list;
+  }
+
+  /** 生成搜索计划：每个 mode 一项，可带分类过滤 */
+  private async searchPlans(): Promise<{ mode: string; categories?: number[] }[]> {
+    if (this.categories.length === 0) {
+      return this.modes.map((mode) => ({ mode }));
+    }
+    // 按分类归属的分组推导 mode（anime 等无对应 mode 的归入 normal 搜索）
+    const groupOf = new Map((await this.listCategories()).map((c) => [c.id, c.group]));
+    const byMode = new Map<string, number[]>();
+    for (const id of this.categories) {
+      const group = groupOf.get(id) ?? "normal";
+      const mode = SEARCH_MODES.has(group) && group !== "normal" ? group : "normal";
+      byMode.set(mode, [...(byMode.get(mode) ?? []), Number(id)]);
+    }
+    return [...byMode.entries()].map(([mode, categories]) => ({ mode, categories }));
+  }
+
   async searchFree(): Promise<FreeTorrent[]> {
     const results = new Map<string, FreeTorrent>();
-    for (const mode of this.modes) {
-      // 1) discount=FREE 过滤搜索
-      const freeBatch = await this.search({
-        mode,
-        discount: "FREE",
+    for (const plan of await this.searchPlans()) {
+      const base = {
+        mode: plan.mode,
+        ...(plan.categories?.length ? { categories: plan.categories } : {}),
         visible: 1,
         pageNumber: 1,
         pageSize: this.pageSize,
+      };
+      // 1) discount=FREE 过滤搜索
+      const freeBatch = await this.search({
+        ...base,
+        discount: "FREE",
         sortDirection: "DESC",
         sortField: "CREATED_DATE",
       });
       // 2) 默认排序头部（mallSingleFree 等不会出现在 discount 过滤结果里）
-      const headBatch = await this.search({
-        mode,
-        visible: 1,
-        pageNumber: 1,
-        pageSize: this.pageSize,
-      });
+      const headBatch = await this.search(base);
       for (const t of [...freeBatch, ...headBatch]) {
         const ft = this.toFreeTorrent(t);
         if (ft && !results.has(ft.torrentId)) results.set(ft.torrentId, ft);

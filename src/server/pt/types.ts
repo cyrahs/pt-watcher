@@ -11,8 +11,18 @@ export interface FreeTorrent {
   category?: string;
 }
 
+export interface PtCategory {
+  siteId: string;
+  id: string;
+  name: string;
+  /** 所属搜索分组，如 adult/movie/music/tvshow/anime/normal */
+  group: string;
+}
+
 export interface PtAdapter {
   siteId: string;
+  /** 站点的可选分类列表（叶子分类），用于 UI 勾选过滤 */
+  listCategories?(): Promise<PtCategory[]>;
   /** 拉当前 FREE 种子列表（含 mallSingleFree 等站点特有 free 机制） */
   searchFree(): Promise<FreeTorrent[]>;
   /** 单种子最新状态（free 是否延期/取消）；返回 null 表示种子已不存在 */

@@ -24,6 +24,10 @@ export const settingsSchema = z.object({
 
   // discover 过滤
   discoverEnabled: z.boolean().default(true),
+  /** 只搜索这些站点分类 id，空 = 不限分类 */
+  searchCategories: z.array(z.string()).default([]),
+  /** 只下载限时 free（排除长期/不限时 free，通常是巨型合集包） */
+  onlyTimeLimitedFree: z.boolean().default(true),
   minFreeHours: z.number().positive().default(24),
   minSizeGB: z.number().nonnegative().default(0),
   maxSizeGB: z.number().nonnegative().default(200),

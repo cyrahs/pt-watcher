@@ -4,7 +4,8 @@ import { desc, eq } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit } from "../qbit/client";
 import { env, getSettings, saveSettings } from "../config";
-import { resetAdapters } from "../pt/registry";
+import { getAdapters, resetAdapters } from "../pt/registry";
+import type { PtCategory } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
 import { logEvent } from "../services/events";
 
@@ -116,6 +117,19 @@ api.get("/events", async (c) => {
     .limit(limit)
     .offset(offset);
   return c.json(rows);
+});
+
+api.get("/pt/categories", async (c) => {
+  const all: PtCategory[] = [];
+  for (const adapter of getAdapters()) {
+    if (!adapter.listCategories) continue;
+    try {
+      all.push(...(await adapter.listCategories()));
+    } catch (e) {
+      console.error(`[api] listCategories(${adapter.siteId}) failed:`, e);
+    }
+  }
+  return c.json(all);
 });
 
 api.get("/settings", (c) => c.json(getSettings()));

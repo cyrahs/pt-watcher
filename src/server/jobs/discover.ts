@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit } from "../qbit/client";
-import { getSettings } from "../config";
+import { getSettings, type Settings } from "../config";
 import { getAdapters } from "../pt/registry";
 import type { FreeTorrent } from "../pt/types";
 import { infoHashFromTorrent } from "../services/torrentFile";
@@ -30,10 +30,15 @@ async function markSeen(siteId: string, torrentId: string) {
     .onConflictDoNothing();
 }
 
-function passesFilters(t: FreeTorrent): { ok: boolean; reason?: string } {
-  const s = getSettings();
-  if (t.freeEndTime) {
-    const remainingHours = (t.freeEndTime.getTime() - Date.now()) / 3600000;
+export function passesFilters(
+  t: FreeTorrent,
+  s: Pick<Settings, "onlyTimeLimitedFree" | "minFreeHours" | "minSizeGB" | "maxSizeGB">,
+  now = Date.now(),
+): { ok: boolean; reason?: string } {
+  if (t.freeEndTime === null) {
+    if (s.onlyTimeLimitedFree) return { ok: false, reason: "不限时 free（已配置只收限时）" };
+  } else {
+    const remainingHours = (t.freeEndTime.getTime() - now) / 3600000;
     if (remainingHours < s.minFreeHours) {
       return { ok: false, reason: `free 剩余 ${remainingHours.toFixed(1)}h < ${s.minFreeHours}h` };
     }
@@ -60,7 +65,7 @@ export async function discover(): Promise<void> {
       continue;
     }
     for (const t of found) {
-      if (!passesFilters(t).ok) continue;
+      if (!passesFilters(t, s).ok) continue;
       if (await isSeen(t.siteId, t.torrentId)) continue;
       candidates.push(t);
     }

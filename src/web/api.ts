@@ -34,6 +34,13 @@ export interface JobStatus {
   running: boolean;
 }
 
+export interface PtCategory {
+  siteId: string;
+  id: string;
+  name: string;
+  group: string;
+}
+
 export interface Status {
   qbit: { configured: boolean; connected: boolean; url: string };
   mteam: { configured: boolean };
@@ -65,6 +72,7 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   runJob: (name: string) => request<{ ok: boolean }>(`/jobs/${name}/run`, { method: "POST" }),
+  ptCategories: () => request<PtCategory[]>("/pt/categories"),
 };
 
 export function formatBytes(n: number | null | undefined): string {

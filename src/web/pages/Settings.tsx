@@ -1,10 +1,91 @@
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, type PtCategory } from "../api";
 
 interface FieldDef {
   key: string;
   label: string;
-  type: "number" | "boolean" | "list" | "text";
+  type: "number" | "boolean" | "list" | "text" | "categories";
+}
+
+const GROUP_LABELS: Record<string, string> = {
+  adult: "成人",
+  movie: "电影",
+  music: "音乐",
+  tvshow: "剧集",
+  anime: "动漫",
+  normal: "综合",
+};
+
+function CategoryPicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [cats, setCats] = useState<PtCategory[] | null>(null);
+
+  useEffect(() => {
+    api.ptCategories().then(setCats).catch(() => setCats([]));
+  }, []);
+
+  if (cats === null) return <div className="muted">分类加载中…</div>;
+  if (cats.length === 0) {
+    // 站点 API 未配置时退化为手填 id
+    return (
+      <input
+        type="text"
+        placeholder="分类 id，逗号分隔（站点 API 未配置，无法拉取列表）"
+        value={selected.join(", ")}
+        onChange={(e) =>
+          onChange(
+            e.target.value
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean),
+          )
+        }
+      />
+    );
+  }
+
+  const groups = [...new Set(cats.map((c) => c.group))];
+  const toggle = (id: string) =>
+    onChange(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
+
+  return (
+    <div>
+      <div className="muted" style={{ marginBottom: 8 }}>
+        不勾选 = 不限分类（按下方搜索 mode 搜索）；勾选后只搜所选分类，mode 自动推导
+      </div>
+      {groups.map((g) => (
+        <div key={g} style={{ marginBottom: 8 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+            {GROUP_LABELS[g] ?? g}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {cats
+              .filter((c) => c.group === g)
+              .map((c) => (
+                <label
+                  key={`${c.siteId}-${c.id}`}
+                  className={`badge ${selected.includes(c.id) ? "" : "muted"}`}
+                  style={{ cursor: "pointer", userSelect: "none" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(c.id)}
+                    onChange={() => toggle(c.id)}
+                    style={{ display: "none" }}
+                  />
+                  {c.name}
+                </label>
+              ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 const GROUPS: { title: string; fields: FieldDef[] }[] = [
@@ -20,7 +101,9 @@ const GROUPS: { title: string; fields: FieldDef[] }[] = [
     title: "发现 free 种子",
     fields: [
       { key: "discoverEnabled", label: "启用自动发现", type: "boolean" },
-      { key: "searchModes", label: "搜索 mode（逗号分隔: normal/movie/tvshow/adult/music）", type: "list" },
+      { key: "onlyTimeLimitedFree", label: "只收限时 free（排除长期 free 的巨型合集）", type: "boolean" },
+      { key: "searchCategories", label: "限定分类", type: "categories" },
+      { key: "searchModes", label: "搜索 mode（未限定分类时生效，逗号分隔: normal/movie/tvshow/adult/music）", type: "list" },
       { key: "minFreeHours", label: "最小剩余 free 时长（小时）", type: "number" },
       { key: "minSizeGB", label: "最小体积（GB，0=不限）", type: "number" },
       { key: "maxSizeGB", label: "最大体积（GB，0=不限）", type: "number" },
@@ -98,6 +181,17 @@ export function Settings() {
             <div className="form-grid">
               {g.fields.map((f) => {
                 const v = values[f.key];
+                if (f.type === "categories") {
+                  return (
+                    <div className="field" key={f.key} style={{ gridColumn: "1 / -1" }}>
+                      <label>{f.label}</label>
+                      <CategoryPicker
+                        selected={Array.isArray(v) ? (v as string[]) : []}
+                        onChange={(ids) => set(f.key, ids)}
+                      />
+                    </div>
+                  );
+                }
                 if (f.type === "boolean") {
                   return (
                     <div className="field checkbox" key={f.key}>
