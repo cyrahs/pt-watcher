@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import { ZodError } from "zod";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, gte, sql } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit, QbitClient } from "../qbit/client";
 import { getSettings, saveSettings } from "../config";
 import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
-import type { PtCategory } from "../pt/types";
+import type { PtCategory, SiteUserStats } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
 import { logEvent } from "../services/events";
+import { dayKey } from "../services/traffic";
 
 export const api = new Hono();
 
@@ -79,6 +80,49 @@ api.post("/torrents/:id/:action", async (c) => {
       return c.json({ error: "unknown action" }, 400);
   }
   return c.json({ ok: true });
+});
+
+api.get("/stats/traffic", async (c) => {
+  const days = Math.min(Math.max(Number(c.req.query("days") ?? 30), 1), 365);
+  const sinceDay = dayKey(new Date(Date.now() - (days - 1) * 86_400_000));
+  const daily = await db
+    .select()
+    .from(schema.trafficDaily)
+    .where(gte(schema.trafficDaily.day, sinceDay))
+    .orderBy(schema.trafficDaily.day);
+  const totals = (
+    await db
+      .select({
+        uploadedBytes: sql<string>`coalesce(sum(${schema.trafficDaily.uploadedBytes}), 0)`,
+        downloadedBytes: sql<string>`coalesce(sum(${schema.trafficDaily.downloadedBytes}), 0)`,
+      })
+      .from(schema.trafficDaily)
+  )[0]!;
+  return c.json({
+    totals: {
+      uploadedBytes: Number(totals.uploadedBytes),
+      downloadedBytes: Number(totals.downloadedBytes),
+    },
+    daily: daily.map((d) => ({
+      day: d.day,
+      uploadedBytes: d.uploadedBytes,
+      downloadedBytes: d.downloadedBytes,
+    })),
+  });
+});
+
+api.get("/stats/site", async (c) => {
+  const out: SiteUserStats[] = [];
+  for (const adapter of getAdapters()) {
+    if (!adapter.getUserStats) continue;
+    try {
+      const s = await adapter.getUserStats();
+      if (s) out.push(s);
+    } catch (e) {
+      console.error(`[api] getUserStats(${adapter.siteId}) failed:`, e);
+    }
+  }
+  return c.json(out);
 });
 
 api.get("/events", async (c) => {

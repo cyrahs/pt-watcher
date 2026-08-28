@@ -8,6 +8,7 @@ export interface QbitTorrentInfo {
   progress: number;
   ratio: number;
   uploaded: number;
+  downloaded: number;
   upspeed: number;
   num_complete: number;
   num_incomplete: number;

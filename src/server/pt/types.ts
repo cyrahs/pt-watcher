@@ -19,10 +19,22 @@ export interface PtCategory {
   group: string;
 }
 
+export interface SiteUserStats {
+  siteId: string;
+  username: string | null;
+  uploadedBytes: number;
+  downloadedBytes: number;
+  /** null = 无下载量（∞） */
+  shareRate: number | null;
+  bonus: number | null;
+}
+
 export interface PtAdapter {
   siteId: string;
   /** 站点的可选分类列表（叶子分类），用于 UI 勾选过滤 */
   listCategories?(): Promise<PtCategory[]>;
+  /** 站点账号总量统计（上传/下载/分享率），实现方应自带缓存以承受高频轮询 */
+  getUserStats?(): Promise<SiteUserStats | null>;
   /** 拉当前 FREE 种子列表（含 mallSingleFree 等站点特有 free 机制） */
   searchFree(): Promise<FreeTorrent[]>;
   /** 单种子最新状态（free 是否延期/取消）；返回 null 表示种子已不存在 */

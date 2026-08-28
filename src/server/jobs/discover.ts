@@ -149,6 +149,9 @@ export async function discover(): Promise<void> {
             freeEndTime: t.freeEndTime,
             progress: inQbit.progress,
             ratio: inQbit.ratio,
+            // 收养前的流量不计入 pt-watcher 统计，计数器从当前值起算
+            lastUploadedBytes: inQbit.uploaded,
+            lastDownloadedBytes: inQbit.downloaded,
             seeders: t.seeders,
             leechers: t.leechers,
             addedAt: new Date(inQbit.added_on * 1000),

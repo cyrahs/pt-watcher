@@ -1,17 +1,37 @@
 import { useEffect, useState } from "react";
-import { api, formatBytes, formatRelative, type EventRow, type Status, type TorrentRow } from "../api";
+import {
+  api,
+  formatBytes,
+  formatRelative,
+  type EventRow,
+  type SiteUserStats,
+  type Status,
+  type TorrentRow,
+  type TrafficStats,
+} from "../api";
 import { EventTable } from "./Events";
+import { TrafficChart } from "../components/TrafficChart";
+
+const TRAFFIC_DAYS = 30;
+
+function localDayKey(d = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 export function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [torrents, setTorrents] = useState<TorrentRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [traffic, setTraffic] = useState<TrafficStats | null>(null);
+  const [siteStats, setSiteStats] = useState<SiteUserStats[]>([]);
   const [error, setError] = useState("");
 
   const load = () => {
     api.status().then(setStatus).catch((e) => setError(String(e)));
     api.torrents().then(setTorrents).catch(() => {});
     api.events(15).then(setEvents).catch(() => {});
+    api.trafficStats(TRAFFIC_DAYS).then(setTraffic).catch(() => {});
+    api.siteStats().then(setSiteStats).catch(() => {});
   };
   useEffect(() => {
     load();
@@ -28,6 +48,9 @@ export function Dashboard() {
   const free = status?.freeSpaceBytes ?? null;
   const threshold = status?.freeSpaceThresholdBytes ?? 0;
   const spaceOk = free != null && free >= threshold;
+
+  const today = traffic?.daily.find((d) => d.day === localDayKey());
+  const mt = siteStats.find((s) => s.siteId === "mteam") ?? null;
 
   return (
     <>
@@ -70,23 +93,56 @@ export function Dashboard() {
               "…"
             )}
           </div>
-          <div className="sub">{status?.qbit.url || "设置 QBIT_URL 环境变量"}</div>
+          <div className="sub">{status?.qbit.url || "请在设置页填写 WebUI 地址"}</div>
         </div>
         <div className="card">
-          <h3>M-Team API</h3>
+          <h3>累计流量（pt-watcher 受管种子）</h3>
           <div className="big">
-            {status ? (
-              status.mteam.configured ? (
-                <span className="badge good">已配置</span>
-              ) : (
-                <span className="badge warn">未配置</span>
-              )
-            ) : (
-              "…"
-            )}
+            <span className="dot up" title="上传" />
+            {formatBytes(traffic?.totals.uploadedBytes ?? null)}{" "}
+            <span className="dot down" title="下载" />
+            {formatBytes(traffic?.totals.downloadedBytes ?? null)}
           </div>
-          <div className="sub">{status?.mteam.configured ? "" : "设置 MT_API_KEY 环境变量"}</div>
+          <div className="sub">
+            今日 上传 {formatBytes(today?.uploadedBytes ?? 0)} · 下载 {formatBytes(today?.downloadedBytes ?? 0)}
+          </div>
         </div>
+        <div className="card">
+          <h3>M-Team 账号{mt?.username ? ` · ${mt.username}` : ""}</h3>
+          {mt ? (
+            <>
+              <div className="big">
+                分享率 {mt.shareRate == null ? "∞" : mt.shareRate.toFixed(2)}
+              </div>
+              <div className="sub">
+                <span className="dot up" title="上传" />
+                {formatBytes(mt.uploadedBytes)} · <span className="dot down" title="下载" />
+                {formatBytes(mt.downloadedBytes)}
+                {mt.bonus != null ? ` · 魔力 ${Math.round(mt.bonus).toLocaleString()}` : ""}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="big">
+                {status ? (
+                  status.mteam.configured ? (
+                    <span className="badge good">已配置</span>
+                  ) : (
+                    <span className="badge warn">未配置</span>
+                  )
+                ) : (
+                  "…"
+                )}
+              </div>
+              <div className="sub">{status?.mteam.configured ? "" : "请在设置页填写 API Key"}</div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="section">
+        <h2>流量统计（近 {TRAFFIC_DAYS} 天）</h2>
+        <TrafficChart daily={traffic?.daily ?? []} days={TRAFFIC_DAYS} />
       </div>
 
       <div className="section">
