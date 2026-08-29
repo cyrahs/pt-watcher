@@ -2,7 +2,7 @@ import { eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings } from "../config";
-import { updateEma } from "../services/popularity";
+import { scoreBatch, updateEma, type ScoreInput } from "../services/popularity";
 import { logEvent } from "../services/events";
 import { addDailyTraffic, counterDelta } from "../services/traffic";
 
@@ -20,7 +20,7 @@ function stateFromQbit(q: QbitTorrentInfo, prevState?: string): string {
  * - 移出受管分类的置 untracked（脱管）
  * - 已脱管的种子移回受管分类则自动重新纳管
  * - qBit 中消失的置 removed_external
- * - 更新统计采样（上传速度 EMA、进度、swarm 数据）
+ * - 更新统计采样（上传速度 EMA、进度、swarm 数据）与流行度评分
  */
 export async function reconcile(): Promise<void> {
   if (!qbit.configured) return;
@@ -39,6 +39,15 @@ export async function reconcile(): Promise<void> {
   const now = new Date();
   let sumDeltaUp = 0;
   let sumDeltaDown = 0;
+
+  // 第一遍：处理外部删除/脱管，收集受管种子的新采样值；评分是批内归一化，需集齐后统一计算
+  const pending: ({
+    row: (typeof rows)[number];
+    q: QbitTorrentInfo;
+    newState: string;
+    deltaUp: number;
+    deltaDown: number;
+  } & ScoreInput)[] = [];
 
   for (const row of rows) {
     const q = byHash.get(row.infoHash);
@@ -62,7 +71,6 @@ export async function reconcile(): Promise<void> {
       });
       continue;
     }
-    // 采样与状态更新
     const newState = stateFromQbit(q, row.state);
     if (newState === "completed" && row.state === "downloading") {
       await logEvent("completed", `下载完成: ${row.name}`, { torrentRef: row.infoHash });
@@ -71,23 +79,43 @@ export async function reconcile(): Promise<void> {
     const deltaDown = counterDelta(q.downloaded, row.lastDownloadedBytes);
     sumDeltaUp += deltaUp;
     sumDeltaDown += deltaDown;
+    pending.push({
+      row,
+      q,
+      newState,
+      deltaUp,
+      deltaDown,
+      upEma: updateEma(row.upEma, q.upspeed),
+      seeders: q.num_complete,
+      leechers: q.num_incomplete,
+      ratio: q.ratio,
+      ageDays: (now.getTime() - row.addedAt.getTime()) / 86400000,
+      qbitPopularity: q.popularity ?? 0,
+    });
+  }
+
+  // 第二遍：采样、状态与评分统一落库
+  const scores = scoreBatch(pending, s);
+  for (const p of pending) {
+    const { row, q } = p;
     await db
       .update(schema.torrents)
       .set({
-        state: newState,
+        state: p.newState,
         category: q.category,
         name: row.addedByWatcher ? row.name : q.name,
         sizeBytes: q.size,
         progress: q.progress,
         ratio: q.ratio,
-        upEma: updateEma(row.upEma, q.upspeed),
+        upEma: p.upEma,
         lastUploadedBytes: q.uploaded,
         lastDownloadedBytes: q.downloaded,
-        totalUploadedBytes: row.totalUploadedBytes + deltaUp,
-        totalDownloadedBytes: row.totalDownloadedBytes + deltaDown,
-        seeders: q.num_complete,
-        leechers: q.num_incomplete,
-        qbitPopularity: q.popularity ?? 0,
+        totalUploadedBytes: row.totalUploadedBytes + p.deltaUp,
+        totalDownloadedBytes: row.totalDownloadedBytes + p.deltaDown,
+        seeders: p.seeders,
+        leechers: p.leechers,
+        qbitPopularity: p.qbitPopularity,
+        score: scores.get(p) ?? row.score,
         statSampledAt: now,
       })
       .where(eq(schema.torrents.id, row.id));
