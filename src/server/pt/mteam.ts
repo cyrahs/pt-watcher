@@ -116,7 +116,7 @@ export class MTeamAdapter implements PtAdapter {
     this.lastRequestAt = Date.now();
   }
 
-  private async request<T>(path: string, init: RequestInit, retries = 1): Promise<T> {
+  private async request<T>(path: string, init: RequestInit, retries = 2): Promise<T> {
     let lastError: unknown;
     for (let attempt = 0; attempt <= retries; attempt++) {
       await this.throttle();
@@ -131,7 +131,8 @@ export class MTeamAdapter implements PtAdapter {
         return data.data as T;
       } catch (e) {
         lastError = e;
-        if (attempt < retries) await new Promise((r) => setTimeout(r, 500));
+        // 递增退避：站点偶发认证/网关抖动通常几秒内恢复，间隔太短两次都会撞上
+        if (attempt < retries) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
       }
     }
     throw new Error(`mteam ${path} failed: ${String(lastError)}`);
