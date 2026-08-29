@@ -90,6 +90,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; }
 }
 .card .big > span { white-space: nowrap; }
 .card .big .updown { display: inline-flex; align-items: center; gap: 12px; }
+.card .big .secondary { color: var(--muted); font-weight: 400; }
 .card .big .badge { font-size: 14px; padding: 3px 10px; font-weight: 600; }
 .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; min-height: 15px; }
 

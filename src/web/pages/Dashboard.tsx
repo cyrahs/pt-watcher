@@ -117,10 +117,19 @@ export function Dashboard() {
                 {formatBytes(traffic?.totals.downloadedBytes ?? null)}
               </span>
             </span>
+            <span className="updown secondary">
+              <span>今日</span>
+              <span>
+                <span className="dot up" title="上传" />
+                {formatBytes(today?.uploadedBytes ?? 0)}
+              </span>
+              <span>
+                <span className="dot down" title="下载" />
+                {formatBytes(today?.downloadedBytes ?? 0)}
+              </span>
+            </span>
           </div>
-          <div className="sub">
-            今日 上传 {formatBytes(today?.uploadedBytes ?? 0)} · 下载 {formatBytes(today?.downloadedBytes ?? 0)}
-          </div>
+          <div className="sub" />
         </div>
         <div className="card">
           <h3>M-Team 账号{mt?.username ? ` · ${mt.username}` : ""}</h3>
