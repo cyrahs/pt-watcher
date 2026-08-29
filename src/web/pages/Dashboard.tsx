@@ -107,27 +107,48 @@ export function Dashboard() {
         <div className="card">
           <h3>累计流量（pt-watcher 受管种子）</h3>
           <div className="big">
-            <span className="dot up" title="上传" />
-            {formatBytes(traffic?.totals.uploadedBytes ?? null)}{" "}
-            <span className="dot down" title="下载" />
-            {formatBytes(traffic?.totals.downloadedBytes ?? null)}
+            <span className="updown">
+              <span>
+                <span className="dot up" title="上传" />
+                {formatBytes(traffic?.totals.uploadedBytes ?? null)}
+              </span>
+              <span>
+                <span className="dot down" title="下载" />
+                {formatBytes(traffic?.totals.downloadedBytes ?? null)}
+              </span>
+            </span>
+            <span className="updown secondary">
+              <span>今日</span>
+              <span>
+                <span className="dot up" title="上传" />
+                {formatBytes(today?.uploadedBytes ?? 0)}
+              </span>
+              <span>
+                <span className="dot down" title="下载" />
+                {formatBytes(today?.downloadedBytes ?? 0)}
+              </span>
+            </span>
           </div>
-          <div className="sub">
-            今日 上传 {formatBytes(today?.uploadedBytes ?? 0)} · 下载 {formatBytes(today?.downloadedBytes ?? 0)}
-          </div>
+          <div className="sub" />
         </div>
         <div className="card">
           <h3>M-Team 账号{mt?.username ? ` · ${mt.username}` : ""}</h3>
           {mt ? (
             <>
               <div className="big">
-                分享率 {mt.shareRate == null ? "∞" : mt.shareRate.toFixed(2)}
+                <span>分享率 {mt.shareRate == null ? "∞" : mt.shareRate.toFixed(2)}</span>
+                <span className="updown">
+                  <span>
+                    <span className="dot up" title="上传" />
+                    {formatBytes(mt.uploadedBytes)}
+                  </span>
+                  <span>
+                    <span className="dot down" title="下载" />
+                    {formatBytes(mt.downloadedBytes)}
+                  </span>
+                </span>
               </div>
-              <div className="sub">
-                <span className="dot up" title="上传" />
-                {formatBytes(mt.uploadedBytes)} · <span className="dot down" title="下载" />
-                {formatBytes(mt.downloadedBytes)}
-              </div>
+              <div className="sub" />
             </>
           ) : (
             <>
