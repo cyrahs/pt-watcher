@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, formatBytes, formatRelative, type TorrentRow } from "../api";
+import { api, formatBytes, formatDuration, formatRelative, type TorrentRow } from "../api";
 
 const STATE_LABELS: Record<string, { label: string; cls: string }> = {
   downloading: { label: "下载中", cls: "" },
@@ -93,6 +93,7 @@ export function Torrents() {
               <th className="num">free 剩余</th>
               <th className="num">评分</th>
               <th className="num">分享率</th>
+              <th className="num">时长</th>
               <th>分类</th>
               <th className="actions">操作</th>
             </tr>
@@ -125,6 +126,9 @@ export function Torrents() {
                   <td className="num">{freeRemaining(t)}</td>
                   <td className="num">{isActive ? t.score.toFixed(3) : "-"}</td>
                   <td className="num">{t.ratio.toFixed(2)}</td>
+                  <td className="num" title={new Date(t.addedAt).toLocaleString()}>
+                    {formatDuration(t.addedAt)}
+                  </td>
                   <td>{t.category}</td>
                   <td className="actions">
                     {isActive && (
@@ -154,7 +158,7 @@ export function Torrents() {
             })}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={10} className="muted empty">
+                <td colSpan={11} className="muted empty">
                   暂无数据
                 </td>
               </tr>

@@ -116,6 +116,16 @@ export function formatBytes(n: number | null | undefined): string {
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+export function formatDuration(iso: string | null): string {
+  if (!iso) return "-";
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "-";
+  if (ms < 60_000) return `${Math.round(ms / 1000)}秒`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}分钟`;
+  if (ms < 86_400_000) return `${(ms / 3_600_000).toFixed(1)}小时`;
+  return `${(ms / 86_400_000).toFixed(1)}天`;
+}
+
 export function formatRelative(iso: string | null): string {
   if (!iso) return "-";
   const ms = Date.now() - new Date(iso).getTime();
