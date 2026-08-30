@@ -44,6 +44,8 @@ export function Dashboard() {
   );
   const downloading = active.filter((t) => t.state === "downloading").length;
   const stopped = active.filter((t) => t.state === "stopped_free_expired").length;
+  const todayKey = localDayKey();
+  const addedToday = torrents.filter((t) => localDayKey(new Date(t.addedAt)) === todayKey).length;
 
   const free = status?.freeSpaceBytes ?? null;
   const threshold = status?.freeSpaceThresholdBytes ?? 0;
@@ -82,7 +84,7 @@ export function Dashboard() {
           <h3>跟踪中种子</h3>
           <div className="big">{active.length}</div>
           <div className="sub">
-            下载中 {downloading} · free到期已停 {stopped}
+            下载中 {downloading} · free到期已停 {stopped} · 今日新添加 {addedToday}
           </div>
         </div>
         <div className="card">
