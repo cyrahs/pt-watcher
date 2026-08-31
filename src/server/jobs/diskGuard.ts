@@ -107,7 +107,7 @@ function reclaimableBytes(row: TorrentRow): number {
   return Math.round(row.sizeBytes * (row.state === "completed" ? 1 : row.progress));
 }
 
-/** 构建候选快照 + 价值估计，并把预测持久化（UI 展示用） */
+/** 构建候选快照 + 价值估计（仅供规划；UI 展示的预测由 reconcile 每轮落库） */
 async function buildCandidates(
   now: number,
 ): Promise<{ candidates: EvictionCandidate[]; valueUnit: "bytes" | "heuristic" }> {
@@ -143,22 +143,6 @@ async function buildCandidates(
   );
   const legacyById = new Map<number, number>();
   for (const [item, score] of scores) legacyById.set(item.row.id, score);
-
-  const predictedAt = new Date(now);
-  await Promise.all(
-    eligible.map((r) => {
-      const v = byId.get(r.id)!;
-      return db
-        .update(schema.torrents)
-        .set({
-          score: legacyById.get(r.id) ?? 0,
-          expectedUploadBytes: v.expectedUploadBytes,
-          predictionKind: v.predictionKind,
-          predictedAt,
-        })
-        .where(eq(schema.torrents.id, r.id));
-    }),
-  );
 
   const protectMs = s.newTorrentProtectHours * 3600 * 1000;
   const candidates: EvictionCandidate[] = eligible.map((r) => ({
