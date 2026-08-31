@@ -59,7 +59,19 @@ export function Dashboard() {
       {error && <div className="error-banner">状态加载失败: {error}</div>}
       <div className="cards">
         <div className="card">
-          <h3>磁盘剩余空间</h3>
+          <h3>
+            磁盘剩余空间
+            {status?.pressure && status.pressure.state !== "HEALTHY" && (
+              <span
+                className={`badge ${status.pressure.state === "UNKNOWN" ? "muted" : status.pressure.state === "BLOCKED" ? "bad" : "warn"}`}
+                style={{ marginLeft: 8 }}
+              >
+                {{ PRESSURE: "空间压力", RECLAIMING: "清理中", BLOCKED: "清理受阻", UNKNOWN: "观测失效" }[
+                  status.pressure.state
+                ] ?? status.pressure.state}
+              </span>
+            )}
+          </h3>
           <div className="big" style={{ color: spaceOk ? "var(--good)" : "var(--bad)" }}>
             {formatBytes(free)}
             {total != null && (

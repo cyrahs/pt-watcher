@@ -8,6 +8,8 @@ import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
 import type { PtCategory, SiteUserStats } from "../pt/types";
 import { hasJob, jobStatuses, runJob } from "../jobs/scheduler";
+import { getDiskGuardState } from "../jobs/diskGuard";
+import { clearAllBlocks } from "../services/downloadControl";
 import { logEvent } from "../services/events";
 import { dayKey } from "../services/traffic";
 
@@ -43,8 +45,19 @@ api.get("/status", async (c) => {
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,
     // pt-watcher 视角的可支配容量：剩余空间 + 受管种子已占用
     diskTotalBytes: freeSpace != null && managedUsed != null ? freeSpace + managedUsed : null,
+    pressure: getDiskGuardState(),
     jobs: jobStatuses(),
   });
+});
+
+// 最近一次清理计划（真实/演练共用同一规划器；计划是建议快照，不是删除授权）
+api.get("/plan", async (c) => {
+  const rows = await db
+    .select()
+    .from(schema.evictionPlans)
+    .orderBy(desc(schema.evictionPlans.createdAt))
+    .limit(1);
+  return c.json({ pressure: getDiskGuardState(), latest: rows[0] ?? null });
 });
 
 api.get("/torrents", async (c) => {
@@ -71,7 +84,8 @@ api.post("/torrents/:id/:action", async (c) => {
       await qbit.stopTorrents([row.infoHash]);
       break;
     case "start":
-      await qbit.startTorrents([row.infoHash]);
+      // 手动恢复：清除全部下载阻断并恢复（用户显式操作，接受可能的非 free 下载计费）
+      await clearAllBlocks(row);
       if (row.state === "stopped_free_expired") {
         await db.update(schema.torrents).set({ state: "downloading" }).where(eq(schema.torrents.id, id));
       }

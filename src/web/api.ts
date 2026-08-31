@@ -14,8 +14,58 @@ export interface TorrentRow {
   progress: number;
   seeders: number;
   leechers: number;
+  /** legacy 批内评分（仅过渡展示，不代表清理顺序） */
   score: number;
+  /** 统一预测窗口内的预计上传字节（null = 无可解释预测/尚未评估） */
+  expectedUploadBytes: number | null;
+  predictionKind: string | null;
+  predictedAt: string | null;
+  downloadBlock: { reasons: string[]; mechanism: string | null } | null;
   addedAt: string;
+}
+
+export interface PressureState {
+  state: "HEALTHY" | "PRESSURE" | "RECLAIMING" | "BLOCKED" | "UNKNOWN";
+  volumeKey: string;
+  freeBytes: number | null;
+  observedAt: string | null;
+  blockedReason: string | null;
+  episodeDeletes: number;
+}
+
+export interface EvictionPlanItem {
+  id: number;
+  name: string;
+  lossValue: number;
+  reclaimableBytes: number;
+  evictionRank: number;
+}
+
+export interface EvictionPlanRow {
+  id: number;
+  createdAt: string;
+  volumeKey: string;
+  triggerReason: string;
+  actualFreeBytes: number;
+  thresholdBytes: number;
+  needBytes: number;
+  status: string;
+  dryRun: boolean;
+  plan: {
+    valueUnit: "bytes" | "heuristic";
+    strategy: string;
+    chosen: EvictionPlanItem[];
+    expectedTotalLoss: number;
+    expectedTotalReclaim: number;
+    expectedOvershoot: number;
+    usedProtected: boolean;
+    reason: string | null;
+  };
+}
+
+export interface PlanResponse {
+  pressure: PressureState;
+  latest: EvictionPlanRow | null;
 }
 
 export interface EventRow {
@@ -67,6 +117,7 @@ export interface Status {
   freeSpaceBytes: number | null;
   freeSpaceThresholdBytes: number;
   diskTotalBytes: number | null;
+  pressure: PressureState;
   jobs: JobStatus[];
 }
 
@@ -93,6 +144,7 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   runJob: (name: string) => request<{ ok: boolean }>(`/jobs/${name}/run`, { method: "POST" }),
+  plan: () => request<PlanResponse>("/plan"),
   trafficStats: (days = 30) => request<TrafficStats>(`/stats/traffic?days=${days}`),
   siteStats: () => request<SiteUserStats[]>("/stats/site"),
   testConnection: (target: "mteam" | "qbit", values: Record<string, unknown>) =>

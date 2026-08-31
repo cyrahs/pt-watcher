@@ -36,16 +36,29 @@ export const settingsSchema = z.object({
   maxAddPerRun: z.number().int().positive().default(10),
   searchModes: z.array(z.string()).default(["normal"]),
 
-  // 空间
+  // 空间（阈值触发、零预留：仅当实测剩余空间低于阈值时才允许清理）
   freeSpaceThresholdGB: z.number().positive().default(100),
   cleanEnabled: z.boolean().default(true),
   cleanDryRun: z.boolean().default(true),
+  /** 新种探索保护（有界：规划无可行方案时自动降级动用保护期候选并记录） */
   newTorrentProtectHours: z.number().nonnegative().default(6),
+  /** 空间观测最大有效年龄；过期观测不能授权删除 */
+  diskObservationMaxAgeSec: z.number().positive().default(20),
+  /** 单次压力事件的删除数量上限（跨 tick 生效的熔断） */
+  maxDeletesPerEpisode: z.number().int().positive().default(20),
+  /** 删除后等待空间释放被观测到的超时；连续超时触发熔断 */
+  deleteSettleTimeoutSec: z.number().positive().default(60),
 
   // freeGuard
   freeStopLeadMinutes: z.number().nonnegative().default(15),
 
-  // 评分权重
+  // 价值估计
+  /** 统一预测窗口（秒），默认 24h；候选间必须一致 */
+  predictionHorizonSec: z.number().positive().default(86400),
+  /** 上传速率 EMA 半衰期（秒）。默认 233s ≈ 旧 alpha=0.3 @ 120s 间隔的等价平滑强度 */
+  uploadEmaHalfLifeSec: z.number().positive().default(233),
+
+  // legacy 评分权重（旧 min-max 批内评分，仅用于对照方案与过渡展示，不再是清理排序契约）
   weightUpload: z.number().default(0.4),
   weightDemand: z.number().default(0.3),
   weightRatio: z.number().default(0.1),
@@ -56,8 +69,11 @@ export const settingsSchema = z.object({
   // job 间隔（秒）
   discoverIntervalSec: z.number().int().positive().default(600),
   freeGuardIntervalSec: z.number().int().positive().default(60),
+  /** @deprecated 旧 spaceClean 任务间隔，已由 diskCheckIntervalSec 取代；保留以兼容旧配置 JSON */
   spaceCleanIntervalSec: z.number().int().positive().default(300),
   reconcileIntervalSec: z.number().int().positive().default(120),
+  /** 高频磁盘空间探测间隔（轻量，只读剩余空间） */
+  diskCheckIntervalSec: z.number().int().positive().default(5),
 });
 
 export type Settings = z.infer<typeof settingsSchema>;

@@ -4,11 +4,15 @@ import { qbit } from "../qbit/client";
 import { getSettings } from "../config";
 import { getAdapter } from "../pt/registry";
 import { logEvent } from "../services/events";
+import { blockDownload } from "../services/downloadControl";
 
 /**
  * free 到期守卫：对已知站点信息（watcher 添加，或 discover 识别的手动添加）、
  * 仍在下载、free 有明确到期时间的种子，在到期前（提前量内）复核站点状态，
- * free 未延期则停止下载，避免产生下载流量。
+ * free 未延期则阻断下载，避免产生站点计费下载量。
+ *
+ * 只阻断下载：已取得的部分数据继续上传（file_prio 机制，见 downloadControl）。
+ * 到期不再意味着删除优先级——保留价值由统一的价值估计评价。
  */
 export async function freeGuard(): Promise<void> {
   if (!qbit.configured) return;
@@ -72,9 +76,9 @@ export async function freeGuard(): Promise<void> {
     if (extended) continue;
 
     try {
-      await qbit.stopTorrents([row.infoHash]);
+      await blockDownload(row, "free_expired");
     } catch (e) {
-      await logEvent("free_guard_error", `停止失败: ${row.name}: ${String(e)}`, {
+      await logEvent("free_guard_error", `阻断下载失败: ${row.name}: ${String(e)}`, {
         torrentRef: row.infoHash,
       });
       continue;
@@ -85,7 +89,7 @@ export async function freeGuard(): Promise<void> {
       .where(eq(schema.torrents.id, row.id));
     await logEvent(
       "free_expired_stopped",
-      `free 到期未完成，已停止下载: ${row.name} (进度 ${(row.progress * 100).toFixed(1)}%)`,
+      `free 到期未完成，已阻断下载（已有 ${(row.progress * 100).toFixed(1)}% 数据继续上传）: ${row.name}`,
       { torrentRef: row.infoHash },
     );
   }

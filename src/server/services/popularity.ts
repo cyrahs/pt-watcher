@@ -17,8 +17,9 @@ function minMaxNorm(values: number[]): (v: number) => number {
 }
 
 /**
- * 流行度综合评分（0~1 左右，越高越值得保留）。
- * 归一化在同批候选内做 min-max，因此分数只用于批内排序，不跨批比较。
+ * legacy 流行度综合评分（0~1 左右，越高越值得保留）。
+ * 归一化在同批候选内做 min-max，分数只在批内可比。
+ * 已不再是清理排序契约：仅用于规划器的对照方案与 UI 过渡展示（新价值模型见 services/value.ts）。
  */
 export function scoreBatch<T extends ScoreInput>(items: T[], s: Settings): Map<T, number> {
   const result = new Map<T, number>();
@@ -41,9 +42,4 @@ export function scoreBatch<T extends ScoreInput>(items: T[], s: Settings): Map<T
     result.set(i, score);
   }
   return result;
-}
-
-/** 上传速度指数均线：alpha 越大越跟随当前值 */
-export function updateEma(prev: number, current: number, alpha = 0.3): number {
-  return prev === 0 ? current : alpha * current + (1 - alpha) * prev;
 }

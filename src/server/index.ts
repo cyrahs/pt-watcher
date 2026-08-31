@@ -6,7 +6,7 @@ import { api } from "./api/routes";
 import { registerJob, startScheduler } from "./jobs/scheduler";
 import { discover } from "./jobs/discover";
 import { freeGuard } from "./jobs/freeGuard";
-import { cleanSpace } from "./jobs/spaceClean";
+import { diskGuardTick } from "./jobs/diskGuard";
 import { reconcile } from "./jobs/reconcile";
 
 async function main() {
@@ -16,7 +16,7 @@ async function main() {
   registerJob("reconcile", reconcile, () => getSettings().reconcileIntervalSec);
   registerJob("freeGuard", freeGuard, () => getSettings().freeGuardIntervalSec);
   registerJob("discover", discover, () => getSettings().discoverIntervalSec);
-  registerJob("spaceClean", () => cleanSpace().then(() => {}), () => getSettings().spaceCleanIntervalSec);
+  registerJob("diskGuard", diskGuardTick, () => getSettings().diskCheckIntervalSec);
   startScheduler();
 
   const app = new Hono();
