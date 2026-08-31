@@ -4,6 +4,7 @@ import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings } from "../config";
 import { isValidInterval, updateRateEma } from "../services/ema";
 import { scoreBatch, type ScoreInput } from "../services/popularity";
+import { estimateRetention } from "../services/value";
 import { logEvent } from "../services/events";
 import { addDailyTraffic, counterDelta } from "../services/traffic";
 
@@ -118,10 +119,22 @@ export async function reconcile(): Promise<void> {
     });
   }
 
-  // 第二遍：采样、状态与 legacy 评分（批内归一化，仅过渡展示）统一落库
+  // 第二遍：采样、状态、legacy 评分（批内归一化，仅过渡展示）与保留价值预测统一落库。
+  // 预测批 = 受管活跃种子，与 diskGuard 压力规划的候选口径一致，global_prior 先验可比。
   const scores = scoreBatch(pending, s);
+  const { byId: valueById } = estimateRetention(
+    pending.map((p) => ({
+      id: p.row.id,
+      emaRate: p.emaInitialized ? p.upEma : null,
+      seeders: p.seeders,
+      leechers: p.leechers,
+      state: p.newState,
+    })),
+    s.predictionHorizonSec,
+  );
   for (const p of pending) {
     const { row, q } = p;
+    const v = valueById.get(row.id)!;
     await db
       .update(schema.torrents)
       .set({
@@ -140,6 +153,9 @@ export async function reconcile(): Promise<void> {
         leechers: p.leechers,
         qbitPopularity: p.qbitPopularity,
         score: scores.get(p) ?? row.score,
+        expectedUploadBytes: v.expectedUploadBytes,
+        predictionKind: v.predictionKind,
+        predictedAt: now,
         statSampledAt: now,
       })
       .where(eq(schema.torrents.id, row.id));
