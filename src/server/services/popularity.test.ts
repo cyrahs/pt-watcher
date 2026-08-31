@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { scoreBatch, updateEma, type ScoreInput } from "./popularity";
+import { scoreBatch, type ScoreInput } from "./popularity";
 import { settingsSchema } from "../config";
 
 const s = settingsSchema.parse({});
@@ -42,15 +42,5 @@ describe("scoreBatch", () => {
     expect(scoreBatch([], s).size).toBe(0);
     const only = item({});
     expect(scoreBatch([only], s).get(only)).toBeGreaterThanOrEqual(0);
-  });
-});
-
-describe("updateEma", () => {
-  test("首次采样直接取当前值", () => {
-    expect(updateEma(0, 500)).toBe(500);
-  });
-  test("平滑跟随", () => {
-    const v = updateEma(1000, 0, 0.3);
-    expect(v).toBe(700);
   });
 });

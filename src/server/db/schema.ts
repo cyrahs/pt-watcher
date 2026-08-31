@@ -15,10 +15,13 @@ import {
 // 种子状态机:
 //   downloading          下载中（受管）
 //   completed            已完成/做种中（受管）
-//   stopped_free_expired free 到期未完成，已被停止（受管，清理优先级最高）
+//   stopped_free_expired free 到期未完成，下载已被阻断（受管；已有数据继续上传，不再有删除硬优先级）
 //   deleted_by_cleanup   已被空间清理删除（终态）
 //   removed_external     在 qBittorrent 中被外部删除（终态）
 //   untracked            已脱管（移出受管分类，不被自动操作；移回受管分类自动重新纳管）
+//
+// 下载阻断与状态正交：downloadBlock.reasons 记录全部阻断原因（free_expired 等），
+// mechanism 记录物理实现（file_prio = 文件全部置为不下载、仍上传；stopped = 整体停止，降级）。
 export const torrents = pgTable(
   "torrents",
   {
@@ -44,7 +47,18 @@ export const torrents = pgTable(
     seeders: integer("seeders").notNull().default(0),
     leechers: integer("leechers").notNull().default(0),
     qbitPopularity: doublePrecision("qbit_popularity").notNull().default(0),
+    /** legacy 展示分数（旧 min-max 批内评分，仅对照/展示，不再是清理排序契约） */
     score: doublePrecision("score").notNull().default(0),
+    /** upEma 是否已由有效采样区间初始化（false 时 upEma 值无意义，0 是有效速率） */
+    emaInitialized: boolean("ema_initialized").notNull().default(false),
+    /** 统一预测窗口内的预计上传字节；无可解释预测时为 null */
+    expectedUploadBytes: doublePrecision("expected_upload_bytes"),
+    /** rate_proxy / global_prior / fallback_heuristic */
+    predictionKind: text("prediction_kind"),
+    predictedAt: timestamp("predicted_at", { withTimezone: true }),
+    /** 下载阻断：{ reasons: string[], mechanism: "file_prio" | "stopped" | null } */
+    downloadBlock: jsonb("download_block")
+      .$type<{ reasons: string[]; mechanism: "file_prio" | "stopped" | null }>(),
     // 时间
     addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
     statSampledAt: timestamp("stat_sampled_at", { withTimezone: true }),
@@ -64,8 +78,28 @@ export const seenSiteTorrents = pgTable(
     siteId: text("site_id").notNull(),
     siteTorrentId: text("site_torrent_id").notNull(),
     seenAt: timestamp("seen_at", { withTimezone: true }).notNull().defaultNow(),
+    /** 本次入场时记录的 free 截止时间，作为 free 周期标记；null = 不限时或未知（保守视为同周期） */
+    freeEndTime: timestamp("free_end_time", { withTimezone: true }),
   },
   (t) => [uniqueIndex("seen_site_torrent_idx").on(t.siteId, t.siteTorrentId)],
+);
+
+// 清理计划快照（决策日志；计划是建议快照，不是继续删除的授权）
+export const evictionPlans = pgTable(
+  "eviction_plans",
+  {
+    id: serial("id").primaryKey(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    volumeKey: text("volume_key").notNull(),
+    triggerReason: text("trigger_reason").notNull().default("observed_below_threshold"),
+    actualFreeBytes: bigint("actual_free_bytes", { mode: "number" }).notNull(),
+    thresholdBytes: bigint("threshold_bytes", { mode: "number" }).notNull(),
+    needBytes: bigint("need_bytes", { mode: "number" }).notNull(),
+    status: text("status").notNull(),
+    dryRun: boolean("dry_run").notNull().default(false),
+    plan: jsonb("plan").notNull(),
+  },
+  (t) => [index("eviction_plans_created_idx").on(t.createdAt)],
 );
 
 export const events = pgTable(

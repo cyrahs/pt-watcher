@@ -139,10 +139,32 @@ export class QbitClient {
     await this.form("/torrents/setCategory", { hashes: hashes.join("|"), category });
   }
 
-  async freeSpaceOnDisk(): Promise<number> {
+  /**
+   * 默认保存路径所在卷的实际剩余空间。
+   * 字段缺失/非法时返回 null（未知 ≠ 0 字节；调用方不得据 null 触发删除）。
+   */
+  async freeSpaceOnDisk(): Promise<number | null> {
     const res = await this.request("/sync/maindata?rid=0");
     const data = (await res.json()) as { server_state?: { free_space_on_disk?: number } };
-    return data.server_state?.free_space_on_disk ?? 0;
+    const v = data.server_state?.free_space_on_disk;
+    return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+  }
+
+  async torrentFiles(hash: string): Promise<{ index: number; priority: number }[]> {
+    const res = await this.request(`/torrents/files?hash=${encodeURIComponent(hash)}`);
+    const files = (await res.json()) as { index?: number; priority: number }[];
+    // 旧版 API 无 index 字段时按数组下标
+    return files.map((f, i) => ({ index: f.index ?? i, priority: f.priority }));
+  }
+
+  /** priority 0 = 不下载（已有分片仍参与上传）；1 = 正常 */
+  async setFilePrio(hash: string, fileIds: number[], priority: number): Promise<void> {
+    if (!fileIds.length) return;
+    await this.form("/torrents/filePrio", {
+      hash,
+      id: fileIds.join("|"),
+      priority: String(priority),
+    });
   }
 }
 

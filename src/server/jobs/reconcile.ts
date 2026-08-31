@@ -2,7 +2,8 @@ import { eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings } from "../config";
-import { scoreBatch, updateEma, type ScoreInput } from "../services/popularity";
+import { isValidInterval, updateRateEma } from "../services/ema";
+import { scoreBatch, type ScoreInput } from "../services/popularity";
 import { logEvent } from "../services/events";
 import { addDailyTraffic, counterDelta } from "../services/traffic";
 
@@ -10,7 +11,9 @@ import { addDailyTraffic, counterDelta } from "../services/traffic";
 export const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"] as const;
 
 function stateFromQbit(q: QbitTorrentInfo, prevState?: string): string {
-  if (prevState === "stopped_free_expired" && q.progress < 1) return "stopped_free_expired";
+  // 下载被阻断的状态粘滞：file_prio 阻断会让 qBit 报告 progress=1（相对已选文件），
+  // 不能据此判定完成；恢复由 free 重入/手动操作显式触发
+  if (prevState === "stopped_free_expired") return "stopped_free_expired";
   return q.progress >= 1 ? "completed" : "downloading";
 }
 
@@ -47,6 +50,9 @@ export async function reconcile(): Promise<void> {
     newState: string;
     deltaUp: number;
     deltaDown: number;
+    emaInitialized: boolean;
+    /** 下载被阻断的行冻结 sizeBytes/progress（file_prio 会改变 qBit 的已选体积口径） */
+    blocked: boolean;
   } & ScoreInput)[] = [];
 
   for (const row of rows) {
@@ -79,13 +85,31 @@ export async function reconcile(): Promise<void> {
     const deltaDown = counterDelta(q.downloaded, row.lastDownloadedBytes);
     sumDeltaUp += deltaUp;
     sumDeltaDown += deltaDown;
+
+    // 上传速率 EMA：累计计数有效差分 + 按实际时间差的半衰期混合。
+    // 计数回退（删除重加/实例更换）或 dt<=0 视为无效区间：跳过采样，只重建基线。
+    const counterReset = q.uploaded < row.lastUploadedBytes;
+    const dtSec = row.statSampledAt ? (now.getTime() - row.statSampledAt.getTime()) / 1000 : 0;
+    let upEma = row.upEma;
+    let emaInitialized = row.emaInitialized;
+    if (!counterReset && isValidInterval(dtSec, deltaUp)) {
+      upEma = updateRateEma(
+        emaInitialized ? row.upEma : null,
+        { deltaBytes: deltaUp, dtSec },
+        s.uploadEmaHalfLifeSec,
+      );
+      emaInitialized = true;
+    }
+
     pending.push({
       row,
       q,
       newState,
       deltaUp,
       deltaDown,
-      upEma: updateEma(row.upEma, q.upspeed),
+      emaInitialized,
+      blocked: newState === "stopped_free_expired",
+      upEma,
       seeders: q.num_complete,
       leechers: q.num_incomplete,
       ratio: q.ratio,
@@ -94,7 +118,7 @@ export async function reconcile(): Promise<void> {
     });
   }
 
-  // 第二遍：采样、状态与评分统一落库
+  // 第二遍：采样、状态与 legacy 评分（批内归一化，仅过渡展示）统一落库
   const scores = scoreBatch(pending, s);
   for (const p of pending) {
     const { row, q } = p;
@@ -104,10 +128,10 @@ export async function reconcile(): Promise<void> {
         state: p.newState,
         category: q.category,
         name: row.addedByWatcher ? row.name : q.name,
-        sizeBytes: q.size,
-        progress: q.progress,
+        ...(p.blocked ? {} : { sizeBytes: q.size, progress: q.progress }),
         ratio: q.ratio,
         upEma: p.upEma,
+        emaInitialized: p.emaInitialized,
         lastUploadedBytes: q.uploaded,
         lastDownloadedBytes: q.downloaded,
         totalUploadedBytes: row.totalUploadedBytes + p.deltaUp,
@@ -166,7 +190,9 @@ export async function reconcile(): Promise<void> {
       addedByWatcher: false,
       progress: q.progress,
       ratio: q.ratio,
-      upEma: q.upspeed,
+      // 首次观测只建立累计计数基线，不伪造差分速率（EMA 未初始化）
+      upEma: 0,
+      emaInitialized: false,
       // 收养前的流量不计入 pt-watcher 统计，计数器从当前值起算
       lastUploadedBytes: q.uploaded,
       lastDownloadedBytes: q.downloaded,

@@ -127,27 +127,37 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
     ],
   },
   {
-    title: "空间清理",
+    title: "空间清理（阈值触发、零预留：仅实测剩余空间低于阈值时清理）",
     fields: [
       { key: "cleanEnabled", label: "启用自动清理", type: "boolean" },
-      { key: "cleanDryRun", label: "dry-run 模式（只记录不真删）", type: "boolean" },
+      { key: "cleanDryRun", label: "dry-run 模式（只记录计划不真删，不模拟释放）", type: "boolean" },
       { key: "freeSpaceThresholdGB", label: "磁盘剩余空间阈值（GB）", type: "number" },
-      { key: "newTorrentProtectHours", label: "新种子保护期（小时）", type: "number" },
+      { key: "newTorrentProtectHours", label: "新种探索保护期（小时，有界：无可行方案时降级动用）", type: "number" },
+      { key: "diskObservationMaxAgeSec", label: "空间观测最大有效期（秒，过期观测不授权删除）", type: "number" },
+      { key: "maxDeletesPerEpisode", label: "单次压力事件删除上限（熔断）", type: "number" },
+      { key: "deleteSettleTimeoutSec", label: "删除后等待释放超时（秒）", type: "number" },
     ],
   },
   {
-    title: "free 到期守卫",
-    fields: [{ key: "freeStopLeadMinutes", label: "到期前提前停止（分钟）", type: "number" }],
+    title: "free 到期守卫（只阻断下载，已有数据继续上传）",
+    fields: [{ key: "freeStopLeadMinutes", label: "到期前提前阻断（分钟）", type: "number" }],
   },
   {
-    title: "流行度评分权重",
+    title: "价值估计",
+    fields: [
+      { key: "predictionHorizonSec", label: "统一预测窗口（秒，默认 86400 = 24h）", type: "number" },
+      { key: "uploadEmaHalfLifeSec", label: "上传速率 EMA 半衰期（秒）", type: "number" },
+    ],
+  },
+  {
+    title: "legacy 评分权重（旧模型，仅用于对照方案与过渡展示）",
     fields: [
       { key: "weightUpload", label: "上传速度权重", type: "number" },
       { key: "weightDemand", label: "需求度权重（leech/seed）", type: "number" },
       { key: "weightRatio", label: "分享率权重", type: "number" },
       { key: "weightAge", label: "年龄权重", type: "number" },
       { key: "weightQbitPopularity", label: "qBit popularity 权重", type: "number" },
-      { key: "ageHalfLifeDays", label: "年龄半衰期（天）", type: "number" },
+      { key: "ageHalfLifeDays", label: "年龄衰减时间常数（天，e-folding）", type: "number" },
     ],
   },
   {
@@ -155,7 +165,7 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
     fields: [
       { key: "discoverIntervalSec", label: "discover", type: "number" },
       { key: "freeGuardIntervalSec", label: "freeGuard", type: "number" },
-      { key: "spaceCleanIntervalSec", label: "spaceClean", type: "number" },
+      { key: "diskCheckIntervalSec", label: "diskGuard（高频空间探测）", type: "number" },
       { key: "reconcileIntervalSec", label: "reconcile", type: "number" },
     ],
   },

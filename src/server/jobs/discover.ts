@@ -6,13 +6,17 @@ import { getAdapters } from "../pt/registry";
 import type { FreeTorrent } from "../pt/types";
 import { infoHashFromTorrent } from "../services/torrentFile";
 import { logEvent } from "../services/events";
-import { cleanSpace } from "./spaceClean";
+import { demandHeuristic } from "../services/value";
+import { isNewFreeCycle } from "../services/freeCycle";
+import { unblockDownload } from "../services/downloadControl";
+import { ensureFreshObservation, isAdditionAllowed, getDiskGuardState } from "./diskGuard";
+import { ACTIVE_STATES } from "./reconcile";
 
 const GB = 1024 ** 3;
 
-async function isSeen(siteId: string, torrentId: string): Promise<boolean> {
+async function getSeen(siteId: string, torrentId: string) {
   const rows = await db
-    .select({ id: schema.seenSiteTorrents.id })
+    .select()
     .from(schema.seenSiteTorrents)
     .where(
       and(
@@ -20,14 +24,40 @@ async function isSeen(siteId: string, torrentId: string): Promise<boolean> {
         eq(schema.seenSiteTorrents.siteTorrentId, torrentId),
       ),
     );
-  return rows.length > 0;
+  return rows[0] ?? null;
 }
 
-async function markSeen(siteId: string, torrentId: string) {
+/** 记录/更新本周期入场标记（freeEndTime 作为周期标识） */
+async function markSeen(siteId: string, torrentId: string, freeEndTime: Date | null) {
   await db
     .insert(schema.seenSiteTorrents)
-    .values({ siteId, siteTorrentId: torrentId })
-    .onConflictDoNothing();
+    .values({ siteId, siteTorrentId: torrentId, freeEndTime, seenAt: new Date() })
+    .onConflictDoUpdate({
+      target: [schema.seenSiteTorrents.siteId, schema.seenSiteTorrents.siteTorrentId],
+      set: { freeEndTime, seenAt: new Date() },
+    });
+}
+
+/**
+ * seen 是否阻止本次入场：同一 free 周期内防抖；新周期且本地已无活跃记录则恢复资格。
+ * （seen 不再是永久排除，交接文稿 §6.3）
+ */
+async function seenBlocks(t: FreeTorrent, now: number): Promise<boolean> {
+  const rec = await getSeen(t.siteId, t.torrentId);
+  if (!rec) return false;
+  if (!isNewFreeCycle(rec.freeEndTime, t.freeEndTime, now)) return true;
+  // 新周期：本地仍有非终态记录（活跃/已脱管）时不重加，由已有行走恢复路径
+  const rows = await db
+    .select({ id: schema.torrents.id })
+    .from(schema.torrents)
+    .where(
+      and(
+        eq(schema.torrents.siteId, t.siteId),
+        eq(schema.torrents.siteTorrentId, t.torrentId),
+        inArray(schema.torrents.state, [...ACTIVE_STATES, "untracked"]),
+      ),
+    );
+  return rows.length > 0;
 }
 
 export function passesFilters(
@@ -49,64 +79,106 @@ export function passesFilters(
   return { ok: true };
 }
 
-/** 发现 free 种子并添加到 qBittorrent */
+/**
+ * 入场排序（交接文稿 §10.1）：需求启发式为主（log1p(leechers/(seeders+1))，
+ * 按 0.1 分桶保证可传递的确定性排序），同档内 free 截止时间升序作次级；
+ * 不限时 free 不再被无条件排到最后（同档内排在有限期之后，但高需求档整体优先）。
+ */
+export function rankCandidates(list: FreeTorrent[]): FreeTorrent[] {
+  const bucket = (t: FreeTorrent) => Math.round(demandHeuristic(t.leechers, t.seeders) * 10);
+  return [...list].sort((a, b) => {
+    const d = bucket(b) - bucket(a);
+    if (d !== 0) return d;
+    const at = a.freeEndTime?.getTime() ?? Infinity;
+    const bt = b.freeEndTime?.getTime() ?? Infinity;
+    if (at !== bt) return at - bt;
+    return a.torrentId < b.torrentId ? -1 : a.torrentId > b.torrentId ? 1 : 0;
+  });
+}
+
+/** 再次 free：恢复被 free 到期阻断的种子的下载（保留部分数据续下，§6.2） */
+async function resumeReFreed(allFound: FreeTorrent[], now: number): Promise<void> {
+  const s = getSettings();
+  const blocked = await db
+    .select()
+    .from(schema.torrents)
+    .where(eq(schema.torrents.state, "stopped_free_expired"));
+  if (blocked.length === 0) return;
+
+  const foundByKey = new Map(allFound.map((t) => [`${t.siteId}:${t.torrentId}`, t]));
+  const leadMs = s.freeStopLeadMinutes * 60 * 1000;
+  for (const row of blocked) {
+    if (!row.siteId || !row.siteTorrentId) continue;
+    const t = foundByKey.get(`${row.siteId}:${row.siteTorrentId}`);
+    if (!t) continue;
+    // 剩余授权太短（freeGuard 会立即再停）则不折腾
+    if (t.freeEndTime !== null && t.freeEndTime.getTime() - now <= leadMs * 2) continue;
+    try {
+      await unblockDownload(row, "free_expired");
+      await db
+        .update(schema.torrents)
+        .set({ state: "downloading", freeEndTime: t.freeEndTime })
+        .where(eq(schema.torrents.id, row.id));
+      await logEvent(
+        "free_reentered",
+        `再次进入 free，恢复下载（复用已有 ${(row.progress * 100).toFixed(1)}% 数据）: ${row.name}`,
+        { torrentRef: row.infoHash },
+      );
+    } catch (e) {
+      await logEvent("discover_error", `恢复下载失败: ${row.name}: ${String(e)}`, {
+        torrentRef: row.infoHash,
+      });
+    }
+  }
+}
+
+/**
+ * 发现 free 种子并添加到 qBittorrent。
+ * 不做空间预留、不按候选体积提前清理、不比较完整体积与空闲空间（交接文稿 §5.4）；
+ * 磁盘压力/未知时整体暂缓新增下载增长（反压），实际空间变化由 diskGuard 高频监控处理。
+ */
 export async function discover(): Promise<void> {
   const s = getSettings();
   if (!s.discoverEnabled || !qbit.configured) return;
+  const now = Date.now();
 
-  // 收集候选
-  const candidates: FreeTorrent[] = [];
+  // 磁盘门控：观测新鲜化后仅 HEALTHY 才允许新增下载增长
+  await ensureFreshObservation();
+  if (!isAdditionAllowed()) {
+    const st = getDiskGuardState();
+    await logEvent(
+      "discover_deferred",
+      `磁盘状态 ${st.state}（${st.freeBytes === null ? "空间未知" : `剩余 ${(st.freeBytes / GB).toFixed(1)}GB`}），本轮暂缓添加新种与恢复下载`,
+    );
+    return;
+  }
+
+  // 收集站点 free 列表
+  const allFound: FreeTorrent[] = [];
   for (const adapter of getAdapters()) {
-    let found: FreeTorrent[];
     try {
-      found = await adapter.searchFree();
+      allFound.push(...(await adapter.searchFree()));
     } catch (e) {
       await logEvent("discover_error", `[${adapter.siteId}] 搜索失败: ${String(e)}`);
-      continue;
     }
-    for (const t of found) {
-      if (!passesFilters(t, s).ok) continue;
-      if (await isSeen(t.siteId, t.torrentId)) continue;
-      candidates.push(t);
-    }
+  }
+  if (allFound.length === 0) return;
+
+  // 已阻断种子再次 free → 恢复下载
+  await resumeReFreed(allFound, now);
+
+  // 过滤 + 周期防抖
+  const candidates: FreeTorrent[] = [];
+  for (const t of allFound) {
+    if (!passesFilters(t, s, now).ok) continue;
+    if (await seenBlocks(t, now)) continue;
+    candidates.push(t);
   }
   if (candidates.length === 0) return;
 
-  // 大者优先能更充分利用 free，但也更容易占满；按剩余 free 时间升序（急的先下）
-  candidates.sort((a, b) => {
-    const at = a.freeEndTime?.getTime() ?? Infinity;
-    const bt = b.freeEndTime?.getTime() ?? Infinity;
-    return at - bt;
-  });
-  const batch = candidates.slice(0, s.maxAddPerRun);
-
-  // 空间预检：现有未完成种子还要写入的量 + 本批大小
-  const active = await db
-    .select()
-    .from(schema.torrents)
-    .where(inArray(schema.torrents.state, ["downloading"]));
-  const pendingBytes = active.reduce(
-    (sum, r) => sum + Math.round(r.sizeBytes * (1 - r.progress)),
-    0,
-  );
-  const batchBytes = batch.reduce((sum, t) => sum + t.sizeBytes, 0);
-  const freeSpace = await qbit.freeSpaceOnDisk();
-  const threshold = s.freeSpaceThresholdGB * GB;
-  let budget = freeSpace - threshold - pendingBytes;
-
-  if (budget < batchBytes) {
-    await cleanSpace(batchBytes + pendingBytes);
-    budget = (await qbit.freeSpaceOnDisk()) - threshold - pendingBytes;
-  }
+  const batch = rankCandidates(candidates).slice(0, s.maxAddPerRun);
 
   for (const t of batch) {
-    if (t.sizeBytes > budget) {
-      await logEvent(
-        "discover_skipped",
-        `空间不足，跳过: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, 预算 ${(budget / GB).toFixed(1)}GB)`,
-      );
-      continue;
-    }
     try {
       const adapter = getAdapters().find((a) => a.siteId === t.siteId)!;
       const file = await adapter.fetchTorrentFile(t.torrentId);
@@ -129,7 +201,7 @@ export async function discover(): Promise<void> {
             { torrentRef: infoHash, payload: { siteId: t.siteId, siteTorrentId: t.torrentId } },
           );
         }
-        await markSeen(t.siteId, t.torrentId);
+        await markSeen(t.siteId, t.torrentId, t.freeEndTime);
         continue;
       }
 
@@ -168,7 +240,7 @@ export async function discover(): Promise<void> {
             { torrentRef: infoHash },
           );
         }
-        await markSeen(t.siteId, t.torrentId);
+        await markSeen(t.siteId, t.torrentId, t.freeEndTime);
         continue;
       }
 
@@ -190,8 +262,7 @@ export async function discover(): Promise<void> {
         seeders: t.seeders,
         leechers: t.leechers,
       });
-      await markSeen(t.siteId, t.torrentId);
-      budget -= t.sizeBytes;
+      await markSeen(t.siteId, t.torrentId, t.freeEndTime);
       await logEvent(
         "added",
         `添加 free 种子: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, free 至 ${
