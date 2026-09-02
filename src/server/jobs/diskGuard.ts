@@ -7,20 +7,22 @@ import { estimateRetention, type ValueInput } from "../services/value";
 import { logEvent } from "../services/events";
 import { planEviction, type EvictionCandidate, type EvictionPlan } from "./evictionPlanner";
 import { ACTIVE_STATES } from "./reconcile";
+import { decideSettle, resolveObservedState, type PendingDelete, type PressureState } from "./diskGuardPolicy";
 
 const GB = 1024 ** 3;
 /** qBittorrent 只报告默认保存路径所在卷；多卷部署是已知限制（见 IMPLEMENTATION_NOTES） */
 const VOLUME_KEY = "qbit-default";
 
-export type PressureState = "HEALTHY" | "PRESSURE" | "RECLAIMING" | "BLOCKED" | "UNKNOWN";
+export type { PressureState } from "./diskGuardPolicy";
 
 interface Episode {
   startedAt: number;
   startFreeBytes: number;
   deletes: number;
-  lastDeleteAt: number | null;
-  freeAtLastDelete: number | null;
-  noProgressCount: number;
+  /** 已下发、等待 qBittorrent 确认消失的删除 */
+  pending: PendingDelete | null;
+  /** 同一压力事件内"删除已确认但空间未涨"只提示一次 */
+  loggedUnobservedRelease: boolean;
   /** 事件去重：同一压力事件内相同内容的计划/提示只记录一次 */
   lastPlanSignature: string | null;
   /** dry-run 下的重规划节流（避免每 tick 全量评分写库） */
@@ -91,13 +93,8 @@ export async function ensureFreshObservation(): Promise<void> {
   const free = await observe();
   guard.freeBytes = free;
   guard.observedAt = free === null ? null : now;
-  if (free === null) {
-    guard.state = "UNKNOWN";
-  } else if (guard.state === "UNKNOWN" || guard.state === "HEALTHY" || guard.state === "PRESSURE") {
-    const threshold = getSettings().freeSpaceThresholdGB * GB;
-    guard.state = free >= threshold ? "HEALTHY" : "PRESSURE";
-  }
-  // BLOCKED / RECLAIMING 状态由 tick 管理，这里不覆盖
+  // 熔断 / RECLAIMING 的推进与恢复清账由 tick 管理，这里只解析状态（熔断跨 UNKNOWN 保持）
+  guard.state = resolveObservedState(guard.state, guard.blockedReason, free, getSettings().freeSpaceThresholdGB * GB);
 }
 
 type TorrentRow = typeof schema.torrents.$inferSelect;
@@ -237,7 +234,9 @@ async function markRecovered(freeBytes: number): Promise<void> {
 /**
  * 高频 tick：观测 → 状态机 → （压力下）规划并单步删除。
  * 不变量：实测 ≥ 阈值绝不删除；每次删除前用新鲜观测复核；恢复即停，剩余计划作废；
- * 删除成功 ≠ 空间已释放（下一 tick 按真实空间重算，不累加预计释放量）。
+ * 删除成功 ≠ 空间已释放（下一 tick 按真实空间重算，不累加预计释放量）；
+ * 熔断只在实测恢复到阈值以上时复位，观测失效（UNKNOWN）不解除熔断；
+ * 删除的确认以 qBittorrent 不再持有该种子为准，空间不涨不是删除失败（见 diskGuardPolicy）。
  */
 export async function diskGuardTick(): Promise<void> {
   if (!qbit.configured) return;
@@ -258,7 +257,7 @@ export async function diskGuardTick(): Promise<void> {
   }
 
   if (free >= threshold) {
-    if (guard.state !== "HEALTHY") await markRecovered(free);
+    if (guard.state !== "HEALTHY" || guard.episode !== null || guard.blockedReason !== null) await markRecovered(free);
     return;
   }
 
@@ -269,9 +268,8 @@ export async function diskGuardTick(): Promise<void> {
       startedAt: now,
       startFreeBytes: free,
       deletes: 0,
-      lastDeleteAt: null,
-      freeAtLastDelete: null,
-      noProgressCount: 0,
+      pending: null,
+      loggedUnobservedRelease: false,
       lastPlanSignature: null,
       lastPlanAt: null,
       loggedDisabled: false,
@@ -283,7 +281,11 @@ export async function diskGuardTick(): Promise<void> {
   }
   const ep = guard.episode;
 
-  if (guard.state === "BLOCKED") return; // 熔断跨 tick 保持，直到实测恢复到阈值以上
+  if (guard.blockedReason !== null) {
+    // 熔断跨 tick 保持（含中间经过 UNKNOWN 的情况），直到实测恢复到阈值以上
+    guard.state = "BLOCKED";
+    return;
+  }
 
   if (!s.cleanEnabled) {
     guard.state = "PRESSURE";
@@ -294,24 +296,40 @@ export async function diskGuardTick(): Promise<void> {
     return;
   }
 
-  // 等待上一次删除的释放被观测到（不在释放状态不明时继续累计删除）
-  if (ep.lastDeleteAt !== null) {
-    if (free > (ep.freeAtLastDelete ?? 0)) {
-      ep.lastDeleteAt = null;
-      ep.freeAtLastDelete = null;
-      ep.noProgressCount = 0;
-    } else if (now - ep.lastDeleteAt < s.deleteSettleTimeoutSec * 1000) {
+  // 等待上一次删除被 qBittorrent 确认（种子消失）；确认前不追加删除
+  if (ep.pending !== null) {
+    const pending = ep.pending;
+    let stillPresent: boolean;
+    try {
+      const rows = await qbit.torrentsInfo({ hashes: [pending.infoHash] });
+      stillPresent = rows.some((r) => r.hash.toLowerCase() === pending.infoHash.toLowerCase());
+    } catch {
+      guard.state = "RECLAIMING"; // 查询失败 → 本 tick 视为未知，不计入超时判定
+      return;
+    }
+    const decision = decideSettle(pending, now, free, stillPresent, s.deleteSettleTimeoutSec * 1000);
+    if (decision.kind === "wait") {
       guard.state = "RECLAIMING";
       return;
-    } else {
-      ep.lastDeleteAt = null;
-      ep.noProgressCount += 1;
-      if (ep.noProgressCount >= 2) {
-        trip("release_not_observed");
-        await logEvent("clean_blocked", "连续删除后未观测到空间释放，已熔断（保持下载阻断，等待人工确认或空间恢复）");
-        return;
-      }
     }
+    if (decision.kind === "trip") {
+      trip(decision.reason);
+      await logEvent(
+        "clean_blocked",
+        `删除 ${pending.name} 后 ${s.deleteSettleTimeoutSec}s 内 qBittorrent 仍持有该种子，删除未被确认，已熔断（保持下载阻断，等待人工确认或空间恢复）`,
+        { torrentRef: pending.infoHash },
+      );
+      return;
+    }
+    if (!decision.releaseObserved && !ep.loggedUnobservedRelease) {
+      ep.loggedUnobservedRelease = true;
+      await logEvent(
+        "release_unobserved",
+        `删除 ${pending.name} 已被 qBittorrent 确认，但 ${s.deleteSettleTimeoutSec}s 内未观测到剩余空间上涨（可能被并发下载抵消，或配额/statfs 钳在 0）；继续按实测空间清理，本次压力事件不再重复提示`,
+        { torrentRef: pending.infoHash },
+      );
+    }
+    ep.pending = null;
   }
 
   if (ep.deletes >= s.maxDeletesPerEpisode) {
@@ -387,8 +405,13 @@ export async function diskGuardTick(): Promise<void> {
     .set({ state: "deleted_by_cleanup", deletedAt: new Date() })
     .where(eq(schema.torrents.id, target.id));
   ep.deletes += 1;
-  ep.lastDeleteAt = Date.now();
-  ep.freeAtLastDelete = fresh;
+  ep.pending = {
+    infoHash: target.infoHash,
+    name: target.name,
+    deletedAt: Date.now(),
+    freeAtDelete: fresh,
+    reclaimableBytes: target.reclaimableBytes,
+  };
   guard.state = "RECLAIMING";
   await logEvent(
     "cleaned",
