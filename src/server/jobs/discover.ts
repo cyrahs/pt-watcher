@@ -142,14 +142,16 @@ export async function discover(): Promise<void> {
   if (!s.discoverEnabled || !qbit.configured) return;
   const now = Date.now();
 
-  // 磁盘门控：观测新鲜化后仅 HEALTHY 才允许新增下载增长
+  // 磁盘门控：观测新鲜化后按有效剩余放行（HEALTHY / RECLAIMING），压力、熔断、观测失效时暂缓新增下载增长
   await ensureFreshObservation();
   if (!isAdditionAllowed()) {
     const st = getDiskGuardState();
-    await logEvent(
-      "discover_deferred",
-      `磁盘状态 ${st.state}（${st.freeBytes === null ? "空间未知" : `剩余 ${(st.freeBytes / GB).toFixed(1)}GB`}），本轮暂缓添加新种与恢复下载`,
-    );
+    const space =
+      st.freeBytes === null
+        ? "空间未知"
+        : `实测剩余 ${(st.freeBytes / GB).toFixed(1)}GB` +
+          (st.pendingReleaseBytes > 0 ? `，待到账释放 ${(st.pendingReleaseBytes / GB).toFixed(1)}GB` : "");
+    await logEvent("discover_deferred", `磁盘状态 ${st.state}（${space}），本轮暂缓添加新种与恢复下载`);
     return;
   }
 

@@ -7,6 +7,8 @@
  *   到账量 = (实测剩余 − 起点剩余) + (会话累计下载 − 起点累计下载)
  * 确认窗口到期后仍未到账超过容差，才是异常（释放不可见 / 删除未被 qBittorrent 执行），
  * 异常态停止继续删除并阻断新增下载，到账追上后自动解除。
+ * 新增下载门控同样按有效剩余：记账释放覆盖缺口（RECLAIMING）即视为已释放、放行加种，
+ * 不等 qBittorrent 的空间数字刷新；释放是否真到账交给上面的对账，没到账再转异常态阻断。
  */
 
 const GB = 1024 ** 3;
@@ -81,6 +83,16 @@ export function resolveObservedState(
   if (blockedReason !== null) return "BLOCKED";
   if (prev === "RECLAIMING") return "RECLAIMING";
   return free >= threshold ? "HEALTHY" : "PRESSURE";
+}
+
+/**
+ * 新增下载写入（加种 / 恢复下载）是否允许。
+ * HEALTHY：实测 ≥ 阈值；RECLAIMING：实测 < 阈值但记账释放已覆盖缺口，删除大多即时生效、
+ * 只是 qBittorrent 刷新滞后，先按已释放放行，事后由台账对账（扣除期间写入）。
+ * PRESSURE（缺口未覆盖）、BLOCKED（未到账 / 删除未确认 / 规划不可行）、UNKNOWN（观测失效）阻断。
+ */
+export function additionAllowed(state: PressureState): boolean {
+  return state === "HEALTHY" || state === "RECLAIMING";
 }
 
 /** 到账容差：预计释放本身是按进度折算的低置信估计，再加上 qBittorrent 空间数字的刷新滞后 */
