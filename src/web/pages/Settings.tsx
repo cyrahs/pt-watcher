@@ -134,8 +134,7 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
       { key: "freeSpaceThresholdGB", label: "磁盘剩余空间阈值（GB）", type: "number" },
       { key: "newTorrentProtectHours", label: "新种探索保护期（小时，有界：无可行方案时降级动用）", type: "number" },
       { key: "diskObservationMaxAgeSec", label: "空间观测最大有效期（秒，过期观测不授权删除）", type: "number" },
-      { key: "maxDeletesPerEpisode", label: "单次压力事件删除上限（熔断）", type: "number" },
-      { key: "deleteSettleTimeoutSec", label: "删除后等待释放超时（秒）", type: "number" },
+      { key: "releaseConfirmWindowSec", label: "释放确认窗口（秒，到期未到账即进入异常态停删）", type: "number" },
     ],
   },
   {

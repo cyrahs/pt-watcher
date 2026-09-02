@@ -29,6 +29,14 @@ const FILTERS = [
 
 const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"];
 
+const BLOCK_REASON_LABELS: Record<string, string> = {
+  release_not_observed: "释放未到账",
+  delete_not_confirmed: "删除未被确认",
+  no_safe_candidates: "无可删候选",
+  insufficient_reclaim: "候选不足以覆盖缺口",
+  invalid_input: "缺口无效",
+};
+
 const PRESSURE_LABELS: Record<string, { label: string; cls: string }> = {
   HEALTHY: { label: "空间健康", cls: "good" },
   PRESSURE: { label: "空间压力", cls: "warn" },
@@ -49,7 +57,9 @@ function PlanPanel({ plan }: { plan: PlanResponse | null }) {
         <h3 style={{ margin: 0 }}>空间清理</h3>
         <span className={`badge ${st.cls}`}>{st.label}</span>
         {plan.pressure.blockedReason && (
-          <span className="badge bad">{plan.pressure.blockedReason}</span>
+          <span className="badge bad" title={plan.pressure.blockedReason}>
+            {BLOCK_REASON_LABELS[plan.pressure.blockedReason] ?? plan.pressure.blockedReason}
+          </span>
         )}
         {showPlan && plan.latest!.dryRun && <span className="badge warn">演练模式，不会执行</span>}
       </div>
@@ -70,6 +80,9 @@ function PlanPanel({ plan }: { plan: PlanResponse | null }) {
             {formatBytes(plan.latest!.plan.expectedTotalReclaim)} · 计划时间{" "}
             {formatRelative(plan.latest!.createdAt)}
             {plan.latest!.plan.usedProtected ? " · 已降级动用保护期候选" : ""}
+            {plan.pressure.pendingReleaseBytes > 0
+              ? ` · 待到账释放 ${formatBytes(plan.pressure.pendingReleaseBytes)}`
+              : ""}
           </div>
           {plan.latest!.plan.chosen.length > 0 ? (
             <ol style={{ margin: 0, paddingLeft: 20 }}>

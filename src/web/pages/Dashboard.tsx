@@ -82,6 +82,9 @@ export function Dashboard() {
           </div>
           <div className="sub">
             {usedRatio != null ? `受管种子已用 ${(usedRatio * 100).toFixed(0)}%` : ""}
+            {status?.pressure && status.pressure.pendingReleaseBytes > 0
+              ? ` · 待到账释放 ${formatBytes(status.pressure.pendingReleaseBytes)}`
+              : ""}
           </div>
           <div className="gauge">
             <div

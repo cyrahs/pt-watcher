@@ -144,10 +144,25 @@ export class QbitClient {
    * 字段缺失/非法时返回 null（未知 ≠ 0 字节；调用方不得据 null 触发删除）。
    */
   async freeSpaceOnDisk(): Promise<number | null> {
+    return (await this.diskObservation()).freeBytes;
+  }
+
+  /**
+   * 剩余空间 + 会话累计下载字节（dl_info_data，qBittorrent 重启归零）。
+   * 后者用于 diskGuard 把并发下载写入从空间变化里扣掉，核对删除释放是否到账。
+   * qBittorrent 的 free_space_on_disk 由后台线程约每 30s 刷新一次，读到的值可能滞后。
+   */
+  async diskObservation(): Promise<{ freeBytes: number | null; downloadedBytes: number | null }> {
     const res = await this.request("/sync/maindata?rid=0");
-    const data = (await res.json()) as { server_state?: { free_space_on_disk?: number } };
-    const v = data.server_state?.free_space_on_disk;
-    return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+    const data = (await res.json()) as {
+      server_state?: { free_space_on_disk?: number; dl_info_data?: number };
+    };
+    const free = data.server_state?.free_space_on_disk;
+    const dl = data.server_state?.dl_info_data;
+    return {
+      freeBytes: typeof free === "number" && Number.isFinite(free) && free >= 0 ? free : null,
+      downloadedBytes: typeof dl === "number" && Number.isFinite(dl) && dl >= 0 ? dl : null,
+    };
   }
 
   async torrentFiles(hash: string): Promise<{ index: number; priority: number }[]> {
