@@ -8,6 +8,7 @@ import { logEvent } from "../services/events";
 import { planEviction, type EvictionCandidate, type EvictionPlan } from "./evictionPlanner";
 import { ACTIVE_STATES } from "./reconcile";
 import {
+  additionAllowed,
   counterReset,
   rebaseAfterCounterReset,
   rebaseSettled,
@@ -88,9 +89,14 @@ export function getDiskGuardState(): {
   };
 }
 
-/** 新增下载写入（discover 加种/恢复下载）是否允许：仅 HEALTHY */
+/**
+ * 新增下载写入（discover 加种/恢复下载）是否允许：HEALTHY 或 RECLAIMING。
+ * RECLAIMING = 实测仍低于阈值但已下发删除的记账释放已覆盖缺口：删除在绝大多数情况下是即时的，
+ * 只是 qBittorrent 的空间数字刷新滞后，因此先按"已释放"放行；到账核对由台账在确认窗口后完成
+ * （扣除期间下载写入），真没释放会转入 BLOCKED 异常态再阻断（见 diskGuardPolicy.additionAllowed）。
+ */
 export function isAdditionAllowed(): boolean {
-  return guard.state === "HEALTHY";
+  return additionAllowed(guard.state);
 }
 
 /** 观测实际剩余空间与会话累计下载；失败/缺失 → null（未知 ≠ 0） */
@@ -297,7 +303,8 @@ async function refreshPresence(ledger: ReleaseLedger): Promise<boolean> {
 /**
  * 高频 tick：观测 → 台账核对 → 状态机 → （压力下）按有效缺口批量删除。
  * 不变量：实测 ≥ 阈值绝不删除；缺口 = 阈值 − (实测 + 未到账释放)，因此有效剩余 ≥ 实测，
- * 记账只会让删除更保守；恢复即停，台账与剩余计划作废；
+ * 记账只会让删除更保守；新增下载门控同样看有效剩余（RECLAIMING 放行，见 isAdditionAllowed）；
+ * 恢复即停，台账与剩余计划作废；
  * 熔断只在实测恢复到阈值以上、或异常自行消失（到账追上 / 种子消失 / 规划重新可行）时复位，
  * 观测失效（UNKNOWN）不解除熔断；删除的确认以 qBittorrent 不再持有该种子为准（见 diskGuardPolicy）。
  */
@@ -417,9 +424,14 @@ export async function diskGuardTick(): Promise<void> {
     return;
   }
 
-  if (guard.blockedReason === null) guard.state = "PRESSURE";
+  // 规划/删除期间有 await，discover 可能并发读状态：在结果出来前保留上一 tick 的状态，
+  // 避免"台账刚结清、马上就要补删"的瞬间被读成 PRESSURE 而白白暂缓一整轮 discover
+  const pressureState: PressureState = guard.blockedReason === null ? "PRESSURE" : guard.state;
   // dry-run 不删除，压力可能长期持续：重规划节流，避免每 tick 全量评分写库
-  if (s.cleanDryRun && ep.lastPlanAt !== null && now - ep.lastPlanAt < REPLAN_INTERVAL_MS) return;
+  if (s.cleanDryRun && ep.lastPlanAt !== null && now - ep.lastPlanAt < REPLAN_INTERVAL_MS) {
+    guard.state = pressureState;
+    return;
+  }
   ep.lastPlanAt = now;
   const { candidates, valueUnit } = await buildCandidates(now);
   const plan = planEviction(candidates, needBytes, valueUnit);
@@ -444,6 +456,7 @@ export async function diskGuardTick(): Promise<void> {
 
   if (s.cleanDryRun) {
     // 演练：记录计划，不删除、不记账、不解除压力
+    guard.state = "PRESSURE";
     if (isNewPlan) {
       const names = plan.chosen.map((c) => `${c.name}(${(c.reclaimableBytes / GB).toFixed(1)}GB)`).join("、");
       await logEvent(
@@ -463,6 +476,7 @@ export async function diskGuardTick(): Promise<void> {
       true,
     );
   } catch (e) {
+    guard.state = "PRESSURE";
     await logEvent("clean_error", `删除失败（${batch.length} 项）: ${String(e)}`, {
       torrentRef: batch[0]?.infoHash,
     });

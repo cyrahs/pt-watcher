@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  additionAllowed,
   counterReset,
   rebaseAfterCounterReset,
   releaseTolerance,
@@ -36,6 +37,19 @@ describe("resolveObservedState", () => {
     expect(resolveObservedState("HEALTHY", null, 9 * GB, T)).toBe("PRESSURE");
     expect(resolveObservedState("PRESSURE", null, T, T)).toBe("HEALTHY");
     expect(resolveObservedState("RECLAIMING", null, 9 * GB, T)).toBe("RECLAIMING");
+  });
+});
+
+describe("additionAllowed：新增下载门控", () => {
+  test("HEALTHY 与 RECLAIMING 放行：记账释放覆盖缺口即视为已释放，不等 qBittorrent 刷新", () => {
+    expect(additionAllowed("HEALTHY")).toBe(true);
+    expect(additionAllowed("RECLAIMING")).toBe(true);
+  });
+
+  test("压力未覆盖、异常/规划不可行熔断、观测失效时阻断", () => {
+    expect(additionAllowed("PRESSURE")).toBe(false);
+    expect(additionAllowed("BLOCKED")).toBe(false);
+    expect(additionAllowed("UNKNOWN")).toBe(false);
   });
 });
 

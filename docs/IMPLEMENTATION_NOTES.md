@@ -19,7 +19,7 @@
 ## 2. 修改文件与控制流
 
 ### 新增
-- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`。**释放记账**：删除下发即把预计释放量记入台账，有效剩余 = 实测 + 未到账释放，缺口 = `threshold - 有效剩余`；每 tick 按缺口把整份计划一次批量下发（不再一个一个等 settle），缺口 ≤ 0 时只等待到账（RECLAIMING）。记账只会让删除更保守（有效剩余 ≥ 实测），实测恢复到阈值以上即清账停删。**到账核对**：用 maindata 的 `dl_info_data`（会话累计下载）差分把并发下载写入扣掉：到账量 = 剩余变化 + 期间写入；确认窗口（`releaseConfirmWindowSec`，默认 90s ≈ 3 个 qBittorrent 空间刷新周期）到期后仍未到账超过容差（max(1GB, 20%) + 最近 30s 写入）→ `release_not_observed` 异常态：停止删除并阻断新增，到账追上后自动解除；到期后 qBittorrent 仍持有该种子 → `delete_not_confirmed`，种子消失后自动解除；规划不可行（`no_safe_candidates` 等）也报 BLOCKED，但每 60s 重试规划，可行即解除。任何熔断在实测恢复到阈值以上时复位；观测失效（UNKNOWN）不解除熔断。不再有删除数量/字节上限（零预留策略下加了多少就得删多少，计数上限只会在同样场景再次卡死）。缺 `dl_info_data` 时退化为不扣写入：不判 `release_not_observed`，只核实种子消失。qBittorrent 重启（计数归零）时已确认消失的条目视为到账。纯决策逻辑在 `diskGuardPolicy.ts`（有测试）。dry-run 只记录计划（签名去重防事件刷屏），不删除、不记账、不解除压力。
+- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`。**释放记账**：删除下发即把预计释放量记入台账，有效剩余 = 实测 + 未到账释放，缺口 = `threshold - 有效剩余`；每 tick 按缺口把整份计划一次批量下发（不再一个一个等 settle），缺口 ≤ 0 时只等待到账（RECLAIMING）。记账只会让删除更保守（有效剩余 ≥ 实测），实测恢复到阈值以上即清账停删。**新增门控也按有效剩余**：RECLAIMING 视为已释放，放行 discover 加种/恢复下载（删除绝大多数即时生效，只是 qBittorrent 空间数字刷新滞后，不必为此卡新下载）；释放是否真到账交给下面的对账，没到账转 BLOCKED 再阻断。**到账核对**：用 maindata 的 `dl_info_data`（会话累计下载）差分把并发下载写入扣掉：到账量 = 剩余变化 + 期间写入；确认窗口（`releaseConfirmWindowSec`，默认 90s ≈ 3 个 qBittorrent 空间刷新周期）到期后仍未到账超过容差（max(1GB, 20%) + 最近 30s 写入）→ `release_not_observed` 异常态：停止删除并阻断新增，到账追上后自动解除；到期后 qBittorrent 仍持有该种子 → `delete_not_confirmed`，种子消失后自动解除；规划不可行（`no_safe_candidates` 等）也报 BLOCKED，但每 60s 重试规划，可行即解除。任何熔断在实测恢复到阈值以上时复位；观测失效（UNKNOWN）不解除熔断。不再有删除数量/字节上限（零预留策略下加了多少就得删多少，计数上限只会在同样场景再次卡死）。缺 `dl_info_data` 时退化为不扣写入：不判 `release_not_observed`，只核实种子消失。qBittorrent 重启（计数归零）时已确认消失的条目视为到账。纯决策逻辑在 `diskGuardPolicy.ts`（有测试）。dry-run 只记录计划（签名去重防事件刷屏），不删除、不记账、不解除压力。
 - `src/server/jobs/evictionPlanner.ts` — **纯**规划器 `planEviction(candidates, needBytes, valueUnit)`：4 个启发式（legacy 对照 / 损失密度 / 剩余缺口修正 / 单项覆盖）→ 去冗余 → 有界单项替换 → 统一比较（总损失 → 超额释放 → 数量 → 稳定 ID）。保护期候选默认避开、覆盖不了时降级动用并标记 `usedProtected`。真实清理 / dry-run / UI 共用。
 - `src/server/services/value.ts` — 保留价值估计：`expectedUploadBytes = EMA 速率 × 统一窗口`（rate_proxy）；缺速率用批内有效速率中位数先验（global_prior）；整批无速率退回 log1p 需求启发式（fallback_heuristic），**同一计划内单位一致，不混合求和**。free 到期/未完成不归零。
 - `src/server/services/ema.ts` — 时间感知 EMA：`alpha = 1 - 2^(-dt/halfLife)`（真半衰期）；null 显式表示未初始化；无效区间（dt≤0、计数回退）由调用方跳过重建基线。拆分/合并区间结果一致（有测试）。
@@ -31,7 +31,7 @@
 - `src/server/jobs/spaceClean.ts`（含 `reserveBytes` 语义、free 到期硬优先、贪心按分删除）。
 
 ### 修改
-- `discover.ts` — 移除空间预检/预算/`cleanSpace` 调用/按完整体积 skip（§3 全部旧规则）；入场排序改为需求启发式分桶降序 + 同档 deadline 升序（不限时不再无条件垫底）；磁盘门控：非 HEALTHY 整轮暂缓新增（`discover_deferred` 事件）；`seen` 改为周期防抖（`markSeen` 记录 freeEndTime，新周期且本地无活跃记录时恢复资格）；被阻断种子再次 free → 恢复下载（复用已有数据）。
+- `discover.ts` — 移除空间预检/预算/`cleanSpace` 调用/按完整体积 skip（§3 全部旧规则）；入场排序改为需求启发式分桶降序 + 同档 deadline 升序（不限时不再无条件垫底）；磁盘门控：HEALTHY / RECLAIMING 放行，PRESSURE / BLOCKED / UNKNOWN 整轮暂缓新增（`discover_deferred` 事件，附实测剩余与待到账释放）；`seen` 改为周期防抖（`markSeen` 记录 freeEndTime，新周期且本地无活跃记录时恢复资格）；被阻断种子再次 free → 恢复下载（复用已有数据）。
 - `freeGuard.ts` — `stopTorrents` → `blockDownload(row, "free_expired")`；语义为只阻断下载、保留上传。
 - `reconcile.ts` — EMA 改为累计计数差分 + dt 半衰期混合；计数回退/dt≤0 跳过采样只重建基线；收养行不再用瞬时 upspeed 伪造均线（`emaInitialized=false`）；`stopped_free_expired` 状态粘滞（filePrio 会让 qBit 报 progress=1，不能据此判完成），且冻结 sizeBytes/progress（filePrio 改变 qBit 已选体积口径）。
 - `qbit/client.ts` — `freeSpaceOnDisk` 返回 `number | null`（缺失 ≠ 0）；新增 `torrentFiles` / `setFilePrio`。
