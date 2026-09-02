@@ -29,6 +29,10 @@ export interface PressureState {
   volumeKey: string;
   freeBytes: number | null;
   observedAt: string | null;
+  /** 实测 + 未到账释放 */
+  effectiveFreeBytes: number | null;
+  /** 已下发删除、尚未在实测中体现的释放 */
+  pendingReleaseBytes: number;
   blockedReason: string | null;
   episodeDeletes: number;
 }

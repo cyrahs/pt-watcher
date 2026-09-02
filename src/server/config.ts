@@ -44,10 +44,12 @@ export const settingsSchema = z.object({
   newTorrentProtectHours: z.number().nonnegative().default(6),
   /** 空间观测最大有效年龄；过期观测不能授权删除 */
   diskObservationMaxAgeSec: z.number().positive().default(20),
-  /** 单次压力事件的删除数量上限（跨 tick 生效的熔断） */
-  maxDeletesPerEpisode: z.number().int().positive().default(20),
-  /** 删除后等待空间释放被观测到的超时；连续超时触发熔断 */
-  deleteSettleTimeoutSec: z.number().positive().default(60),
+  /**
+   * 释放确认窗口：删除下发后多久之内不要求在实测里到账（释放先记账，缺口按有效剩余算）。
+   * 到期仍未到账超过容差 → 异常态：停止删除并阻断新增，到账追上后自动解除。
+   * qBittorrent 的空间数字约 30s 刷新一次，窗口取其 3 倍。
+   */
+  releaseConfirmWindowSec: z.number().positive().default(90),
 
   // freeGuard
   freeStopLeadMinutes: z.number().nonnegative().default(15),

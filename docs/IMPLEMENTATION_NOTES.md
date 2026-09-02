@@ -19,7 +19,7 @@
 ## 2. 修改文件与控制流
 
 ### 新增
-- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`；缺口 = `threshold - actualFree`。单 tick 最多删一个，删除前重新观测复核阈值，实测恢复即停、剩余计划作废；删除成功不等于释放（下一 tick 按真实空间重算）。熔断跨 tick：单事件删除上限（默认 20）、删除下发后超时仍被 qBittorrent 持有（`delete_not_confirmed`）→ BLOCKED，仅实测恢复到阈值以上才复位；观测失效（UNKNOWN）不解除熔断（`blockedReason` 保留，观测恢复后回到 BLOCKED）。删除的确认以 qBittorrent 不再持有该种子为准，不以剩余空间上涨为准：并发下载会抵消释放量、XFS project quota 超软限时 statfs 恒为 0，这两种情况下空间不涨不是删除失败，只记一次 `release_unobserved` 提示并继续按实测空间清理（确认后仍等一个 settle 窗口让空间露头，也限制了释放不可见时的删除节奏）。纯决策逻辑在 `diskGuardPolicy.ts`（有测试）。dry-run 只记录计划（签名去重防事件刷屏），不删除、不模拟释放、不解除压力。
+- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`。**释放记账**：删除下发即把预计释放量记入台账，有效剩余 = 实测 + 未到账释放，缺口 = `threshold - 有效剩余`；每 tick 按缺口把整份计划一次批量下发（不再一个一个等 settle），缺口 ≤ 0 时只等待到账（RECLAIMING）。记账只会让删除更保守（有效剩余 ≥ 实测），实测恢复到阈值以上即清账停删。**到账核对**：用 maindata 的 `dl_info_data`（会话累计下载）差分把并发下载写入扣掉：到账量 = 剩余变化 + 期间写入；确认窗口（`releaseConfirmWindowSec`，默认 90s ≈ 3 个 qBittorrent 空间刷新周期）到期后仍未到账超过容差（max(1GB, 20%) + 最近 30s 写入）→ `release_not_observed` 异常态：停止删除并阻断新增，到账追上后自动解除；到期后 qBittorrent 仍持有该种子 → `delete_not_confirmed`，种子消失后自动解除；规划不可行（`no_safe_candidates` 等）也报 BLOCKED，但每 60s 重试规划，可行即解除。任何熔断在实测恢复到阈值以上时复位；观测失效（UNKNOWN）不解除熔断。不再有删除数量/字节上限（零预留策略下加了多少就得删多少，计数上限只会在同样场景再次卡死）。缺 `dl_info_data` 时退化为不扣写入：不判 `release_not_observed`，只核实种子消失。qBittorrent 重启（计数归零）时已确认消失的条目视为到账。纯决策逻辑在 `diskGuardPolicy.ts`（有测试）。dry-run 只记录计划（签名去重防事件刷屏），不删除、不记账、不解除压力。
 - `src/server/jobs/evictionPlanner.ts` — **纯**规划器 `planEviction(candidates, needBytes, valueUnit)`：4 个启发式（legacy 对照 / 损失密度 / 剩余缺口修正 / 单项覆盖）→ 去冗余 → 有界单项替换 → 统一比较（总损失 → 超额释放 → 数量 → 稳定 ID）。保护期候选默认避开、覆盖不了时降级动用并标记 `usedProtected`。真实清理 / dry-run / UI 共用。
 - `src/server/services/value.ts` — 保留价值估计：`expectedUploadBytes = EMA 速率 × 统一窗口`（rate_proxy）；缺速率用批内有效速率中位数先验（global_prior）；整批无速率退回 log1p 需求启发式（fallback_heuristic），**同一计划内单位一致，不混合求和**。free 到期/未完成不归零。
 - `src/server/services/ema.ts` — 时间感知 EMA：`alpha = 1 - 2^(-dt/halfLife)`（真半衰期）；null 显式表示未初始化；无效区间（dt≤0、计数回退）由调用方跳过重建基线。拆分/合并区间结果一致（有测试）。
@@ -35,7 +35,7 @@
 - `freeGuard.ts` — `stopTorrents` → `blockDownload(row, "free_expired")`；语义为只阻断下载、保留上传。
 - `reconcile.ts` — EMA 改为累计计数差分 + dt 半衰期混合；计数回退/dt≤0 跳过采样只重建基线；收养行不再用瞬时 upspeed 伪造均线（`emaInitialized=false`）；`stopped_free_expired` 状态粘滞（filePrio 会让 qBit 报 progress=1，不能据此判完成），且冻结 sizeBytes/progress（filePrio 改变 qBit 已选体积口径）。
 - `qbit/client.ts` — `freeSpaceOnDisk` 返回 `number | null`（缺失 ≠ 0）；新增 `torrentFiles` / `setFilePrio`。
-- `config.ts` — 新增 `diskCheckIntervalSec(5)`、`diskObservationMaxAgeSec(20)`、`maxDeletesPerEpisode(20)`、`deleteSettleTimeoutSec(60)`、`predictionHorizonSec(86400)`、`uploadEmaHalfLifeSec(233)`；`spaceCleanIntervalSec` 保留但标记 deprecated（兼容旧 JSON）；旧权重字段保留、注释标 legacy。
+- `config.ts` — 新增 `diskCheckIntervalSec(5)`、`diskObservationMaxAgeSec(20)`、`releaseConfirmWindowSec(90)`（取代早期的 `maxDeletesPerEpisode`/`deleteSettleTimeoutSec`，旧 JSON 中的这两个键会被忽略）、`predictionHorizonSec(86400)`、`uploadEmaHalfLifeSec(233)`；`spaceCleanIntervalSec` 保留但标记 deprecated（兼容旧 JSON）；旧权重字段保留、注释标 legacy。
 - `routes.ts` — `/status` 增加 `pressure`；新增 `GET /plan`（最近计划 + 压力状态）；手动 `start` 走 `clearAllBlocks`（用户显式操作视为接受非 free 计费）。
 - `schema.ts` + `drizzle/0002_*.sql` — torrents 增 `ema_initialized / expected_upload_bytes / prediction_kind / predicted_at / download_block`；seen 增 `free_end_time`；新表 `eviction_plans`。迁移含回填：`up_ema>0 → ema_initialized=true`；存量 `stopped_free_expired` → `download_block={reasons:["free_expired"],mechanism:"stopped"}`（如实记录旧机制）。
 - 前端 — `Torrents.tsx`：删掉按 score 升序模拟清理顺序；新增清理计划面板（后端实际计划；HEALTHY 显示"当前无需清理"；dry-run 标"演练模式，不会执行"）；评分列改为"预计上传"（窗口内字节，tooltip 带预测类型/legacy 分/预测时间）。`Dashboard.tsx`：磁盘卡片压力徽标。`Settings.tsx`：新字段分组、legacy 权重改名、`spaceClean` 间隔换成 `diskGuard`。
@@ -69,4 +69,4 @@ legacy `ageHalfLifeDays` 未改公式（真实半衰期 = 14·ln2 ≈ 9.7 天）
 
 - 模型层：规划器保留 `legacy_score_asc` 对照策略；把其余策略视为不可用即回到近似旧排序（但不会恢复 free 到期硬优先/预留——按设计文稿回退原则，这些业务语义不回退）。
 - 执行层：`cleanEnabled=false` 停止一切删除（压力状态与新增暂缓仍生效）；`cleanDryRun=true` 全程演练。
-- 熔断 BLOCKED 的解除条件：实测空间恢复到阈值以上（含手动删种腾出空间）。
+- 熔断 BLOCKED 的解除条件：实测空间恢复到阈值以上（含手动删种腾出空间）；异常态（释放未到账 / 删除未确认）在到账追上或种子消失后自动解除，规划不可行在候选变化后自动解除。释放确实不落地（错卷、硬链接等）时会一直停在异常态，需要人工处理。
