@@ -19,7 +19,7 @@
 ## 2. 修改文件与控制流
 
 ### 新增
-- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`；缺口 = `threshold - actualFree`。单 tick 最多删一个，删除前重新观测复核阈值，实测恢复即停、剩余计划作废；删除成功不等于释放（下一 tick 按真实空间重算）。熔断跨 tick：单事件删除上限（默认 20）、连续删除未观测到释放（2 次）→ BLOCKED，仅实测恢复到阈值以上才复位。dry-run 只记录计划（签名去重防事件刷屏），不删除、不模拟释放、不解除压力。
+- `src/server/jobs/diskGuard.ts` — 高频（默认 5s）空间观测 + 压力状态机（HEALTHY/PRESSURE/RECLAIMING/BLOCKED/UNKNOWN）+ 清理执行闭环。触发条件唯一：`实测剩余 < 阈值`；缺口 = `threshold - actualFree`。单 tick 最多删一个，删除前重新观测复核阈值，实测恢复即停、剩余计划作废；删除成功不等于释放（下一 tick 按真实空间重算）。熔断跨 tick：单事件删除上限（默认 20）、删除下发后超时仍被 qBittorrent 持有（`delete_not_confirmed`）→ BLOCKED，仅实测恢复到阈值以上才复位；观测失效（UNKNOWN）不解除熔断（`blockedReason` 保留，观测恢复后回到 BLOCKED）。删除的确认以 qBittorrent 不再持有该种子为准，不以剩余空间上涨为准：并发下载会抵消释放量、XFS project quota 超软限时 statfs 恒为 0，这两种情况下空间不涨不是删除失败，只记一次 `release_unobserved` 提示并继续按实测空间清理（确认后仍等一个 settle 窗口让空间露头，也限制了释放不可见时的删除节奏）。纯决策逻辑在 `diskGuardPolicy.ts`（有测试）。dry-run 只记录计划（签名去重防事件刷屏），不删除、不模拟释放、不解除压力。
 - `src/server/jobs/evictionPlanner.ts` — **纯**规划器 `planEviction(candidates, needBytes, valueUnit)`：4 个启发式（legacy 对照 / 损失密度 / 剩余缺口修正 / 单项覆盖）→ 去冗余 → 有界单项替换 → 统一比较（总损失 → 超额释放 → 数量 → 稳定 ID）。保护期候选默认避开、覆盖不了时降级动用并标记 `usedProtected`。真实清理 / dry-run / UI 共用。
 - `src/server/services/value.ts` — 保留价值估计：`expectedUploadBytes = EMA 速率 × 统一窗口`（rate_proxy）；缺速率用批内有效速率中位数先验（global_prior）；整批无速率退回 log1p 需求启发式（fallback_heuristic），**同一计划内单位一致，不混合求和**。free 到期/未完成不归零。
 - `src/server/services/ema.ts` — 时间感知 EMA：`alpha = 1 - 2^(-dt/halfLife)`（真半衰期）；null 显式表示未初始化；无效区间（dt≤0、计数回退）由调用方跳过重建基线。拆分/合并区间结果一致（有测试）。
