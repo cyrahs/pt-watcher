@@ -116,7 +116,15 @@ export interface SiteUserStats {
 }
 
 export interface Status {
-  qbit: { configured: boolean; connected: boolean; url: string };
+  qbit: {
+    configured: boolean;
+    connected: boolean;
+    url: string;
+    /** 全局实时下载速度（B/s），未连接时 null */
+    dlSpeedBytesPerSec: number | null;
+    /** 全局实时上传速度（B/s），未连接时 null */
+    upSpeedBytesPerSec: number | null;
+  };
   mteam: { configured: boolean };
   freeSpaceBytes: number | null;
   freeSpaceThresholdBytes: number;
@@ -170,6 +178,12 @@ export function formatBytes(n: number | null | undefined): string {
     i++;
   }
   return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+/** 速率展示：formatBytes + "/s"，null 显示 "-" */
+export function formatSpeed(n: number | null | undefined): string {
+  if (n == null) return "-";
+  return `${formatBytes(n)}/s`;
 }
 
 export function formatDuration(iso: string | null): string {

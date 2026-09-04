@@ -148,20 +148,34 @@ export class QbitClient {
   }
 
   /**
-   * 剩余空间 + 会话累计下载字节（dl_info_data，qBittorrent 重启归零）。
-   * 后者用于 diskGuard 把并发下载写入从空间变化里扣掉，核对删除释放是否到账。
+   * 剩余空间 + 会话累计下载字节（dl_info_data，qBittorrent 重启归零）+ 全局实时上下行速度。
+   * 累计下载用于 diskGuard 把并发下载写入从空间变化里扣掉，核对删除释放是否到账。
    * qBittorrent 的 free_space_on_disk 由后台线程约每 30s 刷新一次，读到的值可能滞后。
    */
-  async diskObservation(): Promise<{ freeBytes: number | null; downloadedBytes: number | null }> {
+  async diskObservation(): Promise<{
+    freeBytes: number | null;
+    downloadedBytes: number | null;
+    /** 全局下载速度（B/s），字段缺失时 null */
+    dlSpeed: number | null;
+    /** 全局上传速度（B/s），字段缺失时 null */
+    upSpeed: number | null;
+  }> {
     const res = await this.request("/sync/maindata?rid=0");
     const data = (await res.json()) as {
-      server_state?: { free_space_on_disk?: number; dl_info_data?: number };
+      server_state?: {
+        free_space_on_disk?: number;
+        dl_info_data?: number;
+        dl_info_speed?: number;
+        up_info_speed?: number;
+      };
     };
-    const free = data.server_state?.free_space_on_disk;
-    const dl = data.server_state?.dl_info_data;
+    const nonNeg = (v: unknown): number | null =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
     return {
-      freeBytes: typeof free === "number" && Number.isFinite(free) && free >= 0 ? free : null,
-      downloadedBytes: typeof dl === "number" && Number.isFinite(dl) && dl >= 0 ? dl : null,
+      freeBytes: nonNeg(data.server_state?.free_space_on_disk),
+      downloadedBytes: nonNeg(data.server_state?.dl_info_data),
+      dlSpeed: nonNeg(data.server_state?.dl_info_speed),
+      upSpeed: nonNeg(data.server_state?.up_info_speed),
     };
   }
 
