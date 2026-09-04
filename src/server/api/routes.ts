@@ -25,9 +25,14 @@ api.get("/status", async (c) => {
   let freeSpace: number | null = null;
   let managedUsed: number | null = null;
   let qbitOk = false;
+  let dlSpeed: number | null = null;
+  let upSpeed: number | null = null;
   if (qbit.configured) {
     try {
-      freeSpace = await qbit.freeSpaceOnDisk();
+      const obs = await qbit.diskObservation();
+      freeSpace = obs.freeBytes;
+      dlSpeed = obs.dlSpeed;
+      upSpeed = obs.upSpeed;
       // 受管种子已占用的磁盘空间（已下载的选中字节数）
       const infos = await Promise.all(
         s.managedCategories.map((cat) => qbit.torrentsInfo({ category: cat })),
@@ -39,7 +44,14 @@ api.get("/status", async (c) => {
     }
   }
   return c.json({
-    qbit: { configured: qbit.configured, connected: qbitOk, url: s.qbitUrl },
+    qbit: {
+      configured: qbit.configured,
+      connected: qbitOk,
+      url: s.qbitUrl,
+      // 全局实时速度（B/s），未连接或字段缺失时 null
+      dlSpeedBytesPerSec: qbitOk ? dlSpeed : null,
+      upSpeedBytesPerSec: qbitOk ? upSpeed : null,
+    },
     mteam: { configured: Boolean(s.mtApiKey) },
     freeSpaceBytes: freeSpace,
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,

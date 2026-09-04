@@ -3,6 +3,7 @@ import {
   api,
   formatBytes,
   formatRelative,
+  formatSpeed,
   type EventRow,
   type SiteUserStats,
   type Status,
@@ -107,7 +108,19 @@ export function Dashboard() {
           <div className="big">
             {status ? (
               status.qbit.connected ? (
-                <span className="badge good">已连接</span>
+                <>
+                  <span className="badge good">已连接</span>
+                  <span className="updown">
+                    <span>
+                      <span className="dot up" title="上传速度" />
+                      {formatSpeed(status.qbit.upSpeedBytesPerSec)}
+                    </span>
+                    <span>
+                      <span className="dot down" title="下载速度" />
+                      {formatSpeed(status.qbit.dlSpeedBytesPerSec)}
+                    </span>
+                  </span>
+                </>
               ) : status.qbit.configured ? (
                 <span className="badge bad">连接失败</span>
               ) : (
