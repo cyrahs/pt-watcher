@@ -91,7 +91,7 @@ bun run build      # 前端产物到 dist/web，由后端静态托管
 
 1. Zero Trust → Access → Service credentials → **Service Tokens** 新建 token，记下 Client ID / Client Secret
 2. 在 pt-watcher 现有的 Access 应用里**新增一条策略**：Action 选 **Service Auth**（不是 Allow，service token 只匹配 Service Auth 策略），Include 选 Service Token → 上一步的 token。原来给自己登录用的 Allow 策略保持不变
-3. 把 token 存进 1Password：vault `pt-watcher`、条目 `cloudflare-access`，字段 `client_id`、`client_secret`、`url`（实例根地址，如 `https://ptw.example.com`）
+3. 把 token 存进 1Password：vault `Agent`、条目 `cloudflare access - claude code`，字段 `client_id`、`client_secret`（按标签匹配），再加一个 URL 类型字段填实例根地址（如 `https://ptw.example.com`）
 4. 客户端环境提供 1Password service account（`OP_SERVICE_ACCOUNT_TOKEN`，对该 vault 只读即可）；若环境限制出站域名，把实例域名加入白名单
 
 之后用 `scripts/ptw-api.sh` 调用（运行时经 `op` 读取 token，不落盘、不进命令行参数）：
@@ -102,7 +102,7 @@ scripts/ptw-api.sh '/api/events?since=24h&type=clean_blocked'
 scripts/ptw-api.sh PUT /api/settings '{"cleanDryRun":false}'
 ```
 
-条目路径可用 `PTW_OP_ITEM` 覆盖，地址可用 `PTW_URL` 覆盖；本地开发 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。Claude Code 的使用说明在 `.claude/skills/pt-watcher-ops/SKILL.md`。
+vault / 条目可用 `PTW_OP_VAULT` / `PTW_OP_ITEM` 覆盖，地址可用 `PTW_URL` 覆盖；本地开发 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。被 Access 拦截（重定向到登录页）时脚本以退出码 3 报错。Claude Code 的使用说明在 `.claude/skills/pt-watcher-ops/SKILL.md`。
 
 ## 安全模型
 
