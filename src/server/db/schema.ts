@@ -84,6 +84,46 @@ export const seenSiteTorrents = pgTable(
   (t) => [uniqueIndex("seen_site_torrent_idx").on(t.siteId, t.siteTorrentId)],
 );
 
+// 发现候选日志：站点 free 列表里每个种子每个 free 周期一行，同周期内再次看到只更新该行。
+// 记录首次看到时的站点特征（入场时的 swarm）与最近一次决策，含被过滤、排名靠后、暂缓的候选，
+// 用于分析过滤条件与排序是否错过了好种子。经 infoHash / 站点种子 id 与 torrents 关联。
+// decision: added / existing / filtered / seen / ranked_out / deferred / error（见 services/discoverLog.ts）
+export const discoverCandidates = pgTable(
+  "discover_candidates",
+  {
+    id: serial("id").primaryKey(),
+    siteId: text("site_id").notNull(),
+    siteTorrentId: text("site_torrent_id").notNull(),
+    name: text("name").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    siteCategory: text("site_category"),
+    /** 最近一次看到的 free 截止（周期内延期会更新）；null = 不限时 */
+    freeEndTime: timestamp("free_end_time", { withTimezone: true }),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    seenCount: integer("seen_count").notNull().default(1),
+    /** 首次看到时的 swarm（入场特征） */
+    seeders: integer("seeders").notNull(),
+    leechers: integer("leechers").notNull(),
+    snatched: integer("snatched").notNull(),
+    /** 最近一次看到时的 swarm（未入场候选的需求走势可作反事实的粗略代理） */
+    lastSeeders: integer("last_seeders").notNull(),
+    lastLeechers: integer("last_leechers").notNull(),
+    lastSnatched: integer("last_snatched").notNull(),
+    decision: text("decision").notNull(),
+    reason: text("reason"),
+    /** 最近一次进入排序时的名次（1 起）；未进入排序为 null */
+    rank: integer("rank"),
+    /** 本周期内被添加的时刻 */
+    addedAt: timestamp("added_at", { withTimezone: true }),
+    infoHash: text("info_hash"),
+  },
+  (t) => [
+    index("discover_candidates_site_idx").on(t.siteId, t.siteTorrentId),
+    index("discover_candidates_last_seen_idx").on(t.lastSeenAt),
+  ],
+);
+
 // 清理计划快照（决策日志；计划是建议快照，不是继续删除的授权）
 export const evictionPlans = pgTable(
   "eviction_plans",
@@ -102,7 +142,7 @@ export const evictionPlans = pgTable(
   (t) => [index("eviction_plans_created_idx").on(t.createdAt)],
 );
 
-// 受管种子的定时快照（时间序列）：reconcile 按 snapshotIntervalSec 降采样落库。
+// 受管种子的定时快照（时间序列）：snapshot 任务按 snapshotIntervalSec 取 reconcile 最近一次采样落库（ts = 采样时刻）。
 // 某时刻的 expectedUploadBytes 对比之后一个预测窗口内 totalUploadedBytes 的实际增量，即可事后评估预测；
 // 种子被删除后不再有快照（结合 torrents.deleted_at 判断删失）
 export const torrentSnapshots = pgTable(
@@ -130,6 +170,30 @@ export const torrentSnapshots = pgTable(
     index("torrent_snapshots_ts_idx").on(t.ts),
     index("torrent_snapshots_torrent_ts_idx").on(t.torrentId, t.ts),
   ],
+);
+
+// 系统级定时快照：与种子快照同一采样间隔。剩余空间、速度、压力状态与站点账号数据的历史，
+// 用于调阈值、观察真实优化目标（站点上传/分享率/魔力值）的走势，gitSha 把数据对应到部署版本
+export const systemSnapshots = pgTable(
+  "system_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    ts: timestamp("ts", { withTimezone: true }).notNull(),
+    gitSha: text("git_sha"),
+    qbitConnected: boolean("qbit_connected").notNull(),
+    freeBytes: bigint("free_bytes", { mode: "number" }),
+    /** 受管种子已占用（已下载的选中字节） */
+    managedUsedBytes: bigint("managed_used_bytes", { mode: "number" }),
+    dlSpeedBytesPerSec: doublePrecision("dl_speed_bytes_per_sec"),
+    upSpeedBytesPerSec: doublePrecision("up_speed_bytes_per_sec"),
+    pressureState: text("pressure_state").notNull(),
+    pendingReleaseBytes: bigint("pending_release_bytes", { mode: "number" }).notNull().default(0),
+    /** 各状态种子数 { state: count } */
+    torrentCounts: jsonb("torrent_counts").$type<Record<string, number>>().notNull(),
+    /** 各站点账号数据（SiteUserStats[]），取不到的站点缺席 */
+    siteStats: jsonb("site_stats").notNull(),
+  },
+  (t) => [index("system_snapshots_ts_idx").on(t.ts)],
 );
 
 export const events = pgTable(

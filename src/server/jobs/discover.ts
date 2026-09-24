@@ -8,6 +8,11 @@ import { infoHashFromTorrent } from "../services/torrentFile";
 import { logEvent } from "../services/events";
 import { demandHeuristic } from "../services/value";
 import { isNewFreeCycle } from "../services/freeCycle";
+import {
+  recordCandidates,
+  type CandidateDecision,
+  type CandidateObservation,
+} from "../services/discoverLog";
 import { unblockDownload } from "../services/downloadControl";
 import { ensureFreshObservation, isAdditionAllowed, getDiskGuardState } from "./diskGuard";
 import { ACTIVE_STATES } from "./reconcile";
@@ -142,18 +147,10 @@ export async function discover(): Promise<void> {
   if (!s.discoverEnabled || !qbit.configured) return;
   const now = Date.now();
 
-  // 磁盘门控：观测新鲜化后按有效剩余放行（HEALTHY / RECLAIMING），压力、熔断、观测失效时暂缓新增下载增长
+  // 磁盘门控：观测新鲜化后按有效剩余放行（HEALTHY / RECLAIMING），压力、熔断、观测失效时暂缓新增下载增长。
+  // 暂缓时仍照常搜索与评估（不添加、不恢复），把压力期间错过的候选记入候选日志
   await ensureFreshObservation();
-  if (!isAdditionAllowed()) {
-    const st = getDiskGuardState();
-    const space =
-      st.freeBytes === null
-        ? "空间未知"
-        : `实测剩余 ${(st.freeBytes / GB).toFixed(1)}GB` +
-          (st.pendingReleaseBytes > 0 ? `，待到账释放 ${(st.pendingReleaseBytes / GB).toFixed(1)}GB` : "");
-    await logEvent("discover_deferred", `磁盘状态 ${st.state}（${space}），本轮暂缓添加新种与恢复下载`);
-    return;
-  }
+  const additionAllowed = isAdditionAllowed();
 
   // 收集站点 free 列表
   const allFound: FreeTorrent[] = [];
@@ -164,23 +161,83 @@ export async function discover(): Promise<void> {
       await logEvent("discover_error", `[${adapter.siteId}] 搜索失败: ${String(e)}`);
     }
   }
-  if (allFound.length === 0) return;
+
+  const observations: CandidateObservation[] = [];
+  try {
+    await evaluate(allFound, additionAllowed, now, observations);
+  } finally {
+    // 候选日志是辅助数据：失败只记日志，不影响本轮结果
+    try {
+      await recordCandidates(observations, new Date(now));
+    } catch (e) {
+      console.error("[discover] recordCandidates failed:", e);
+    }
+  }
+}
+
+async function evaluate(
+  allFound: FreeTorrent[],
+  additionAllowed: boolean,
+  now: number,
+  observations: CandidateObservation[],
+): Promise<void> {
+  const s = getSettings();
+  const note = (
+    torrent: FreeTorrent,
+    decision: CandidateDecision,
+    extra: Omit<CandidateObservation, "torrent" | "decision"> = {},
+  ) => observations.push({ torrent, decision, ...extra });
 
   // 已阻断种子再次 free → 恢复下载
-  await resumeReFreed(allFound, now);
+  if (additionAllowed && allFound.length > 0) await resumeReFreed(allFound, now);
 
   // 过滤 + 周期防抖
   const candidates: FreeTorrent[] = [];
   for (const t of allFound) {
-    if (!passesFilters(t, s, now).ok) continue;
-    if (await seenBlocks(t, now)) continue;
+    const f = passesFilters(t, s, now);
+    if (!f.ok) {
+      note(t, "filtered", { reason: f.reason });
+      continue;
+    }
+    if (await seenBlocks(t, now)) {
+      note(t, "seen");
+      continue;
+    }
     candidates.push(t);
   }
-  if (candidates.length === 0) return;
+  const ranked = rankCandidates(candidates);
 
-  const batch = rankCandidates(candidates).slice(0, s.maxAddPerRun);
+  if (!additionAllowed) {
+    const st = getDiskGuardState();
+    const space =
+      st.freeBytes === null
+        ? "空间未知"
+        : `实测剩余 ${(st.freeBytes / GB).toFixed(1)}GB` +
+          (st.pendingReleaseBytes > 0 ? `，待到账释放 ${(st.pendingReleaseBytes / GB).toFixed(1)}GB` : "");
+    ranked.forEach((t, i) => note(t, "deferred", { reason: st.state, rank: i + 1 }));
+    await logEvent(
+      "discover_deferred",
+      `磁盘状态 ${st.state}（${space}），本轮暂缓添加新种与恢复下载（${ranked.length} 个可入场候选已记入候选日志）`,
+      {
+        payload: {
+          state: st.state,
+          freeBytes: st.freeBytes,
+          pendingReleaseBytes: st.pendingReleaseBytes,
+          deferredCandidates: ranked.length,
+        },
+      },
+    );
+    return;
+  }
+  if (ranked.length === 0) return;
 
-  for (const t of batch) {
+  const batch = ranked.slice(0, s.maxAddPerRun);
+  ranked
+    .slice(s.maxAddPerRun)
+    .forEach((t, i) => note(t, "ranked_out", { rank: s.maxAddPerRun + i + 1 }));
+
+  for (const [i, t] of batch.entries()) {
+    const rank = i + 1;
     try {
       const adapter = getAdapters().find((a) => a.siteId === t.siteId)!;
       const file = await adapter.fetchTorrentFile(t.torrentId);
@@ -204,13 +261,15 @@ export async function discover(): Promise<void> {
           );
         }
         await markSeen(t.siteId, t.torrentId, t.freeEndTime);
+        note(t, "existing", { reason: existing.siteId ? "db_record" : "db_backfilled", rank, infoHash });
         continue;
       }
 
       // qBittorrent 已有但 DB 没有（手动添加且 reconcile 尚未跑，或在非受管分类）
       const inQbit = (await qbit.torrentsInfo({ hashes: [infoHash] }))[0];
       if (inQbit) {
-        if (new Set(s.managedCategories).has(inQbit.category)) {
+        const managed = new Set(s.managedCategories).has(inQbit.category);
+        if (managed) {
           await db.insert(schema.torrents).values({
             infoHash,
             siteId: t.siteId,
@@ -243,6 +302,7 @@ export async function discover(): Promise<void> {
           );
         }
         await markSeen(t.siteId, t.torrentId, t.freeEndTime);
+        note(t, "existing", { reason: managed ? "adopted" : "unmanaged_category", rank, infoHash });
         continue;
       }
 
@@ -265,14 +325,29 @@ export async function discover(): Promise<void> {
         leechers: t.leechers,
       });
       await markSeen(t.siteId, t.torrentId, t.freeEndTime);
+      note(t, "added", { rank, infoHash });
       await logEvent(
         "added",
         `添加 free 种子: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, free 至 ${
           t.freeEndTime ? t.freeEndTime.toISOString() : "不限"
         })`,
-        { torrentRef: infoHash, payload: { siteId: t.siteId, siteTorrentId: t.torrentId } },
+        {
+          torrentRef: infoHash,
+          payload: {
+            siteId: t.siteId,
+            siteTorrentId: t.torrentId,
+            siteCategory: t.category ?? null,
+            sizeBytes: t.sizeBytes,
+            freeEndTime: t.freeEndTime,
+            seeders: t.seeders,
+            leechers: t.leechers,
+            snatched: t.snatched,
+            rank,
+          },
+        },
       );
     } catch (e) {
+      note(t, "error", { reason: String(e).slice(0, 500), rank });
       await logEvent("discover_error", `添加失败: ${t.name}: ${String(e)}`);
     }
   }

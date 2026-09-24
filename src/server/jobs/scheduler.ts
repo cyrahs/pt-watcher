@@ -1,3 +1,5 @@
+import { logEvent } from "../services/events";
+
 export interface JobStatus {
   name: string;
   lastRunAt: Date | null;
@@ -35,10 +37,20 @@ export async function runJob(name: string): Promise<void> {
   job.status.lastRunAt = new Date();
   try {
     await job.run();
+    if (job.status.lastError !== null) {
+      await logEvent("job_recovered", `任务 ${name} 恢复正常`, {
+        payload: { job: name, previousError: job.status.lastError },
+      });
+    }
     job.status.lastError = null;
   } catch (e) {
-    job.status.lastError = e instanceof Error ? e.message : String(e);
+    const error = e instanceof Error ? e.message : String(e);
     console.error(`[job:${name}] failed:`, e);
+    // 只在状态变化（首次失败或错误变了）时记事件：高频任务持续失败不刷屏
+    if (error !== job.status.lastError) {
+      await logEvent("job_failed", `任务 ${name} 失败: ${error}`, { payload: { job: name, error } });
+    }
+    job.status.lastError = error;
   } finally {
     job.status.running = false;
     job.status.lastFinishedAt = new Date();

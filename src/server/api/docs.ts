@@ -35,7 +35,8 @@ export const endpointDocs: EndpointDoc[] = [
   {
     method: "GET",
     path: "/status",
-    summary: "运行状态：qBittorrent 连接与实时速度、磁盘剩余与阈值、空间压力状态机、各 job 最近运行情况",
+    summary:
+      "运行状态：部署版本、qBittorrent 连接与实时速度、磁盘剩余与阈值、受管占用、空间压力状态机、各 job 最近运行情况",
   },
   { method: "GET", path: "/plan", summary: "最近一次清理计划 + 当前空间压力状态" },
   { method: "GET", path: "/stats/site", summary: "各站点账号数据（上传/下载量、分享率、魔力值），实时请求站点" },
@@ -67,10 +68,23 @@ export const endpointDocs: EndpointDoc[] = [
   },
   {
     method: "GET",
-    path: "/snapshots",
-    summary: "受管种子的时间序列快照（按 snapshotIntervalSec 采样），用于评估预测与趋势分析",
+    path: "/snapshots/torrents",
+    summary:
+      "受管种子时间序列快照（每 snapshotIntervalSec 一批，ts 为 reconcile 采样时刻）：累计上传/下载、EMA、swarm、当时的预测，用于评估预测与收益曲线",
     params: {
       torrentId: "种子 id 过滤，逗号分隔",
+      ...TIME_RANGE,
+      ...PAGED,
+      limit: "每页条数（默认 1000，最大 10000）",
+      order: "asc（默认）/ desc（按 id）",
+    },
+  },
+  {
+    method: "GET",
+    path: "/snapshots/system",
+    summary:
+      "系统时间序列快照（与种子快照同间隔）：剩余空间、受管占用、全局速度、压力状态、各状态种子数、站点账号数据（上传/下载/分享率/魔力值）、部署版本 gitSha",
+    params: {
       ...TIME_RANGE,
       ...PAGED,
       limit: "每页条数（默认 1000，最大 10000）",
@@ -93,6 +107,23 @@ export const endpointDocs: EndpointDoc[] = [
     },
   },
   { method: "GET", path: "/plans/:id", summary: "单个清理计划" },
+  {
+    method: "GET",
+    path: "/discover/candidates",
+    summary:
+      "发现候选日志：站点 free 列表中每个种子每个 free 周期一行，含首次看到时的站点特征（体积/分类/seeders/leechers/snatched）、最近一次看到时的 swarm、最近一次决策与名次；经 infoHash 或站点种子 id 与 /torrents 关联",
+    params: {
+      decision:
+        "决策过滤，逗号分隔：added / existing（reason: db_record / db_backfilled / adopted / unmanaged_category）/ filtered（reason 为具体条件）/ seen / ranked_out / deferred（reason 为磁盘状态）/ error",
+      siteId: "站点",
+      added: "true = 本周期内已添加 / false = 未添加",
+      since: "最近一次看到的时间下限（含）",
+      until: "最近一次看到的时间上限（不含）",
+      ...PAGED,
+      limit: "每页条数（默认 500，最大 5000）",
+      order: "asc / desc（默认 desc，按 id）",
+    },
+  },
   {
     method: "GET",
     path: "/events",
@@ -130,12 +161,12 @@ export const endpointDocs: EndpointDoc[] = [
   {
     method: "PUT",
     path: "/settings",
-    summary: "修改配置：请求体为要修改的字段（部分更新），保存后立即生效",
+    summary: "修改配置：请求体为要修改的字段（部分更新），保存后立即生效；变更前后值记入 settings_updated 事件（凭据脱敏）",
   },
   {
     method: "POST",
     path: "/jobs/:name/run",
-    summary: "立即触发一次任务：reconcile / freeGuard / discover / diskGuard",
+    summary: "立即触发一次任务：reconcile / freeGuard / discover / diskGuard / snapshot",
   },
   { method: "POST", path: "/test/mteam", summary: "测试 M-Team 连接（请求体可带未保存的 mtApiKey / mtBaseUrl）" },
   { method: "POST", path: "/test/qbit", summary: "测试 qBittorrent 连接（请求体可带未保存的 qbitUrl / qbitApiKey）" },

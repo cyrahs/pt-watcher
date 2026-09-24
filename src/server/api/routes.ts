@@ -1,7 +1,21 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
-import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, sql, type AnyColumn } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  sql,
+  type AnyColumn,
+} from "drizzle-orm";
 import { db, schema } from "../db";
 import { apiConventions, endpointDocs } from "./docs";
 import {
@@ -17,7 +31,8 @@ import {
   parseTorrentRef,
 } from "./query";
 import { qbit, QbitClient } from "../qbit/client";
-import { getSettings, saveSettings } from "../config";
+import { buildInfo, diffSettings, getSettings, saveSettings } from "../config";
+import { qbitOverview } from "../services/overview";
 import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
 import type { PtCategory, SiteUserStats } from "../pt/types";
@@ -58,41 +73,24 @@ api.get("/", (c) =>
 
 api.get("/status", async (c) => {
   const s = getSettings();
-  let freeSpace: number | null = null;
-  let managedUsed: number | null = null;
-  let qbitOk = false;
-  let dlSpeed: number | null = null;
-  let upSpeed: number | null = null;
-  if (qbit.configured) {
-    try {
-      const obs = await qbit.diskObservation();
-      freeSpace = obs.freeBytes;
-      dlSpeed = obs.dlSpeed;
-      upSpeed = obs.upSpeed;
-      // 受管种子已占用的磁盘空间（已下载的选中字节数）
-      const infos = await Promise.all(
-        s.managedCategories.map((cat) => qbit.torrentsInfo({ category: cat })),
-      );
-      managedUsed = infos.flat().reduce((sum, t) => sum + Math.max(t.size - t.amount_left, 0), 0);
-      qbitOk = true;
-    } catch {
-      qbitOk = false;
-    }
-  }
+  const q = await qbitOverview(s.managedCategories);
   return c.json({
+    version: buildInfo,
     qbit: {
       configured: qbit.configured,
-      connected: qbitOk,
+      connected: q.connected,
       url: s.qbitUrl,
       // 全局实时速度（B/s），未连接或字段缺失时 null
-      dlSpeedBytesPerSec: qbitOk ? dlSpeed : null,
-      upSpeedBytesPerSec: qbitOk ? upSpeed : null,
+      dlSpeedBytesPerSec: q.dlSpeed,
+      upSpeedBytesPerSec: q.upSpeed,
     },
     mteam: { configured: Boolean(s.mtApiKey) },
-    freeSpaceBytes: freeSpace,
+    freeSpaceBytes: q.freeBytes,
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,
+    managedUsedBytes: q.managedUsedBytes,
     // pt-watcher 视角的可支配容量：剩余空间 + 受管种子已占用
-    diskTotalBytes: freeSpace != null && managedUsed != null ? freeSpace + managedUsed : null,
+    diskTotalBytes:
+      q.freeBytes != null && q.managedUsedBytes != null ? q.freeBytes + q.managedUsedBytes : null,
     pressure: getDiskGuardState(),
     jobs: jobStatuses(),
   });
@@ -171,7 +169,7 @@ api.get("/torrents/:ref", async (c) => {
   return c.json({ torrent, recentEvents });
 });
 
-api.get("/snapshots", async (c) => {
+api.get("/snapshots/torrents", async (c) => {
   const s = schema.torrentSnapshots;
   const ids = parseIdList("torrentId", c.req.query("torrentId"));
   const since = parseTime(c.req.query("since"));
@@ -185,6 +183,28 @@ api.get("/snapshots", async (c) => {
     .where(
       and(
         ids ? inArray(s.torrentId, ids) : undefined,
+        since ? gte(s.ts, since) : undefined,
+        until ? lt(s.ts, until) : undefined,
+        afterCursor(s.id, cursor, order),
+      ),
+    )
+    .orderBy(byId(s.id, order))
+    .limit(limit);
+  return c.json(rows);
+});
+
+api.get("/snapshots/system", async (c) => {
+  const s = schema.systemSnapshots;
+  const since = parseTime(c.req.query("since"));
+  const until = parseTime(c.req.query("until"));
+  const cursor = parsePositiveInt("cursor", c.req.query("cursor"));
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "asc");
+  const limit = parseLimit(c.req.query("limit"), 1000, 10000);
+  const rows = await db
+    .select()
+    .from(s)
+    .where(
+      and(
         since ? gte(s.ts, since) : undefined,
         until ? lt(s.ts, until) : undefined,
         afterCursor(s.id, cursor, order),
@@ -364,6 +384,34 @@ api.get("/plans", async (c) => {
   return c.json(rows);
 });
 
+api.get("/discover/candidates", async (c) => {
+  const d = schema.discoverCandidates;
+  const decisions = parseList(c.req.query("decision"));
+  const siteId = c.req.query("siteId") || undefined;
+  const added = parseBool("added", c.req.query("added"));
+  const since = parseTime(c.req.query("since"));
+  const until = parseTime(c.req.query("until"));
+  const cursor = parsePositiveInt("cursor", c.req.query("cursor"));
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "desc");
+  const limit = parseLimit(c.req.query("limit"), 500, 5000);
+  const rows = await db
+    .select()
+    .from(d)
+    .where(
+      and(
+        decisions ? inArray(d.decision, decisions) : undefined,
+        siteId ? eq(d.siteId, siteId) : undefined,
+        added === true ? isNotNull(d.addedAt) : added === false ? isNull(d.addedAt) : undefined,
+        since ? gte(d.lastSeenAt, since) : undefined,
+        until ? lt(d.lastSeenAt, until) : undefined,
+        afterCursor(d.id, cursor, order),
+      ),
+    )
+    .orderBy(byId(d.id, order))
+    .limit(limit);
+  return c.json(rows);
+});
+
 api.get("/plans/:id", async (c) => {
   const id = parsePositiveInt("id", c.req.param("id"))!;
   const rows = await db.select().from(schema.evictionPlans).where(eq(schema.evictionPlans.id, id));
@@ -389,10 +437,17 @@ api.get("/settings", (c) => c.json(getSettings()));
 api.put("/settings", async (c) => {
   const body = await c.req.json();
   try {
+    const before = getSettings();
     const saved = await saveSettings(body);
     resetAdapters();
     qbit.resetConnection();
-    await logEvent("settings_updated", "配置已更新");
+    const changes = diffSettings(before, saved);
+    const keys = Object.keys(changes);
+    await logEvent(
+      "settings_updated",
+      keys.length > 0 ? `配置已更新: ${keys.join(", ")}` : "配置已保存（无变更）",
+      { payload: { changes } },
+    );
     return c.json(saved);
   } catch (e) {
     if (e instanceof ZodError) {

@@ -38,6 +38,8 @@ interface Episode {
   ledger: ReleaseLedger | null;
   /** 事件去重：同一压力事件内相同内容的计划/提示只记录一次 */
   lastPlanSignature: string | null;
+  /** 最近落库的计划 id（删除/演练事件据此关联到计划） */
+  lastPlanId: number | null;
   lastPlanAt: number | null;
   loggedDisabled: boolean;
 }
@@ -220,11 +222,12 @@ function planSignature(plan: EvictionPlan, needBytes: number): string {
 
 async function persistPlan(
   plan: EvictionPlan,
+  candidates: EvictionCandidate[],
   freeBytes: number,
   thresholdBytes: number,
   dryRun: boolean,
-): Promise<void> {
-  await db.insert(schema.evictionPlans).values({
+): Promise<number> {
+  const [row] = await db.insert(schema.evictionPlans).values({
     volumeKey: VOLUME_KEY,
     triggerReason: "observed_below_threshold",
     actualFreeBytes: freeBytes,
@@ -249,8 +252,16 @@ async function persistPlan(
       usedProtected: plan.usedProtected,
       exclusions: plan.exclusions,
       reason: plan.reason ?? null,
+      // 完整候选（含未选中的），供事后对照被保留种子的实际上传评估规划
+      candidates: candidates.map((c) => ({
+        id: c.id,
+        lossValue: c.lossValue,
+        reclaimableBytes: c.reclaimableBytes,
+        protectedByAge: c.protectedByAge,
+      })),
     },
-  });
+  }).returning({ id: schema.evictionPlans.id });
+  return row!.id;
 }
 
 /** 进入熔断；同一原因只记一次事件 */
@@ -276,6 +287,14 @@ async function markRecovered(freeBytes: number): Promise<void> {
       `空间已恢复到阈值以上（剩余 ${(freeBytes / GB).toFixed(1)}GB，本次压力事件删除 ${
         guard.episode.deletes
       } 个种子，净变化 ${(freed / GB).toFixed(1)}GB），剩余清理计划作废`,
+      {
+        payload: {
+          freeBytes,
+          deletes: guard.episode.deletes,
+          netChangeBytes: freed,
+          durationSec: Math.round((Date.now() - guard.episode.startedAt) / 1000),
+        },
+      },
     );
   }
   guard.episode = null;
@@ -338,6 +357,7 @@ export async function diskGuardTick(): Promise<void> {
       deletes: 0,
       ledger: null,
       lastPlanSignature: null,
+      lastPlanId: null,
       lastPlanAt: null,
       loggedDisabled: false,
     };
@@ -439,7 +459,7 @@ export async function diskGuardTick(): Promise<void> {
   const isNewPlan = signature !== ep.lastPlanSignature;
   if (isNewPlan) {
     ep.lastPlanSignature = signature;
-    await persistPlan(plan, free, threshold, s.cleanDryRun);
+    ep.lastPlanId = await persistPlan(plan, candidates, free, threshold, s.cleanDryRun);
   }
 
   if (plan.status !== "feasible") {
@@ -462,7 +482,7 @@ export async function diskGuardTick(): Promise<void> {
       await logEvent(
         "clean_dry_run",
         `[dry-run] 低空间（有效缺口 ${(needBytes / GB).toFixed(1)}GB），计划删除 ${plan.chosen.length} 项（策略 ${plan.strategy}）: ${names}`,
-        { payload: { strategy: plan.strategy, chosen: plan.chosen.map((c) => c.id) } },
+        { payload: { planId: ep.lastPlanId, strategy: plan.strategy, chosen: plan.chosen.map((c) => c.id) } },
       );
     }
     return;
@@ -512,7 +532,12 @@ export async function diskGuardTick(): Promise<void> {
       `空间清理删除: ${c.name}（预计释放 ${(c.reclaimableBytes / GB).toFixed(1)}GB，损失代理 ${c.lossValue.toFixed(3)}，策略 ${plan.strategy}，本批 ${batch.length} 项覆盖有效缺口 ${(needBytes / GB).toFixed(1)}GB）`,
       {
         torrentRef: c.infoHash,
-        payload: { lossValue: c.lossValue, reclaimableBytes: c.reclaimableBytes, batchSize: batch.length },
+        payload: {
+          planId: ep.lastPlanId,
+          lossValue: c.lossValue,
+          reclaimableBytes: c.reclaimableBytes,
+          batchSize: batch.length,
+        },
       },
     );
   }

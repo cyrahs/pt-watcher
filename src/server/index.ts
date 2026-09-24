@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { serveStatic } from "hono/bun";
 import { runMigrations } from "./db/migrate";
-import { env, getSettings, loadSettings } from "./config";
+import { buildInfo, env, getSettings, loadSettings } from "./config";
+import { logEvent } from "./services/events";
+import { SNAPSHOT_CHECK_INTERVAL_SEC, snapshotTick } from "./jobs/snapshot";
 import { api } from "./api/routes";
 import { registerJob, startScheduler } from "./jobs/scheduler";
 import { discover } from "./jobs/discover";
@@ -17,6 +19,10 @@ async function main() {
   registerJob("freeGuard", freeGuard, () => getSettings().freeGuardIntervalSec);
   registerJob("discover", discover, () => getSettings().discoverIntervalSec);
   registerJob("diskGuard", diskGuardTick, () => getSettings().diskCheckIntervalSec);
+  registerJob("snapshot", snapshotTick, () => SNAPSHOT_CHECK_INTERVAL_SEC);
+  await logEvent("app_started", `pt-watcher 启动（版本 ${buildInfo.gitSha ?? "unknown"}）`, {
+    payload: buildInfo,
+  });
   startScheduler();
 
   const app = new Hono();

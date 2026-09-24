@@ -7,12 +7,6 @@ import { scoreBatch, type ScoreInput } from "../services/popularity";
 import { estimateRetention } from "../services/value";
 import { logEvent } from "../services/events";
 import { addDailyTraffic, counterDelta } from "../services/traffic";
-import {
-  lastSnapshotAt,
-  recordSnapshots,
-  snapshotDue,
-  type SnapshotRow,
-} from "../services/snapshots";
 
 /** 仍受管、会被自动操作的状态 */
 export const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"] as const;
@@ -31,7 +25,6 @@ function stateFromQbit(q: QbitTorrentInfo, prevState?: string): string {
  * - 已脱管的种子移回受管分类则自动重新纳管
  * - qBit 中消失的置 removed_external
  * - 更新统计采样（上传速度 EMA、进度、swarm 数据）与流行度评分
- * - 按 snapshotIntervalSec 落时间序列快照
  */
 export async function reconcile(): Promise<void> {
   if (!qbit.configured) return;
@@ -139,26 +132,9 @@ export async function reconcile(): Promise<void> {
     })),
     s.predictionHorizonSec,
   );
-  const snapshots: SnapshotRow[] = [];
   for (const p of pending) {
     const { row, q } = p;
     const v = valueById.get(row.id)!;
-    snapshots.push({
-      ts: now,
-      torrentId: row.id,
-      state: p.newState,
-      sizeBytes: p.blocked ? row.sizeBytes : q.size,
-      progress: p.blocked ? row.progress : q.progress,
-      totalUploadedBytes: row.totalUploadedBytes + p.deltaUp,
-      totalDownloadedBytes: row.totalDownloadedBytes + p.deltaDown,
-      upEma: p.emaInitialized ? p.upEma : null,
-      seeders: p.seeders,
-      leechers: p.leechers,
-      ratio: q.ratio,
-      expectedUploadBytes: v.expectedUploadBytes,
-      predictionKind: v.predictionKind,
-      predictionHorizonSec: s.predictionHorizonSec,
-    });
     await db
       .update(schema.torrents)
       .set({
@@ -186,17 +162,6 @@ export async function reconcile(): Promise<void> {
   }
 
   await addDailyTraffic(sumDeltaUp, sumDeltaDown);
-
-  // 时间序列快照是辅助数据：失败只记日志，不阻断后续的重新纳管/收养
-  if (snapshots.length > 0) {
-    try {
-      if (snapshotDue(await lastSnapshotAt(), now, s.snapshotIntervalSec)) {
-        await recordSnapshots(snapshots, now, s.snapshotRetentionDays);
-      }
-    } catch (e) {
-      console.error("[reconcile] snapshot failed:", e);
-    }
-  }
 
   // 已脱管的种子移回受管分类 → 自动重新纳管
   const untrackedRows = await db

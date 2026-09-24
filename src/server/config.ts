@@ -9,6 +9,12 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
 };
 
+/** 版本标记（镜像构建时由 CI 注入 GIT_SHA），用于把运行数据对应到具体部署 */
+export const buildInfo = {
+  gitSha: process.env.GIT_SHA || null,
+  startedAt: new Date().toISOString(),
+};
+
 // ---- 行为配置: 存 settings 表，UI 可编辑，此处定义 schema 与默认值 ----
 // 连接类字段的环境变量仅作为 settings 表中尚无该值时的默认种子
 
@@ -104,6 +110,23 @@ export async function loadSettings(): Promise<Settings> {
 export function getSettings(): Settings {
   if (!cached) throw new Error("settings not loaded yet");
   return cached;
+}
+
+/** 含凭据的字段：变更记录只标记"已修改"，不记录值 */
+const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
+
+export type SettingsDiff = Record<string, { from: unknown; to: unknown }>;
+
+/** 两份配置的差异（供 settings_updated 事件记录，便于把行为变化归因到具体改动） */
+export function diffSettings(before: Settings, after: Settings): SettingsDiff {
+  const out: SettingsDiff = {};
+  for (const key of Object.keys(after) as (keyof Settings)[]) {
+    if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+    out[key] = SECRET_KEYS.has(key)
+      ? { from: "<redacted>", to: "<redacted>" }
+      : { from: before[key], to: after[key] };
+  }
+  return out;
 }
 
 export async function saveSettings(patch: unknown): Promise<Settings> {

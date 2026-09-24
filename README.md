@@ -10,7 +10,7 @@
 - **空间自动清理**：磁盘剩余空间低于阈值（或不足以容纳 incoming 种子）时，按流行度综合评分从低到高删除；free 到期被停的未完成种子优先清理；支持 dry-run
 - **基于分类的管辖**：受管分类内的**全部**种子（含手动添加的，自动「收养」）参与流行度排序与清理；托管与分类强绑定：把种子移出受管分类即**脱管**，不再被自动停止/删除；移回受管分类自动重新纳管
 - **Web UI**：概览（磁盘空间/任务状态）、种子列表（来源/状态/评分/free 剩余 + 手动操作）、事件日志、全部行为配置在线编辑
-- **HTTP API**：UI 的全部能力 + 过滤/翻页/历史查询 + 种子时间序列快照，`GET /api` 返回自描述索引；可经 Cloudflare Access service token 供脚本与 agent 访问（见下文）
+- **HTTP API**：UI 的全部能力 + 过滤/翻页/历史查询 + 种子与系统时间序列 + 发现候选日志，`GET /api` 返回自描述索引；可经 Cloudflare Access service token 供脚本与 agent 访问（见下文）
 
 ## 流行度评分
 
@@ -69,13 +69,21 @@ bun run build      # 前端产物到 dist/web，由后端静态托管
 | `GET /api/status` | 运行状态、磁盘与空间压力、各 job 状态 |
 | `GET /api/torrents?state=&q=&sort=&order=&limit=&offset=` | 种子列表（含终态记录） |
 | `GET /api/torrents/:ref` | 单个种子 + 相关事件（ref = id 或 infohash） |
-| `GET /api/snapshots?torrentId=&since=&until=&cursor=` | 受管种子时间序列快照（默认每小时一次、保留 90 天，可在设置中调整） |
-| `GET /api/events?type=&torrentRef=&since=&until=&cursor=` | 事件日志 |
+| `GET /api/snapshots/torrents?torrentId=&since=&until=&cursor=` | 受管种子时间序列：累计上传/下载、EMA、swarm、当时的预测 |
+| `GET /api/snapshots/system?since=&until=&cursor=` | 系统时间序列：剩余空间、受管占用、速度、压力状态、各状态种子数、站点账号数据、部署版本 |
+| `GET /api/discover/candidates?decision=&added=&since=&cursor=` | 发现候选日志：每个站点种子每个 free 周期一行，含入场时特征与决策（含被过滤/排名靠后/暂缓的） |
+| `GET /api/events?type=&torrentRef=&since=&until=&cursor=` | 事件日志（关键事件带结构化 payload） |
 | `GET /api/events/stats?since=&bucket=hour\|day` | 事件按类型计数 |
-| `GET /api/plans?status=&dryRun=&since=&cursor=` | 清理计划历史 |
+| `GET /api/plans?status=&dryRun=&since=&cursor=` | 清理计划历史（含完整候选） |
 | `GET /api/stats/traffic?days=` | 受管种子流量 |
 
 时间参数接受 ISO 8601 或相对时长（`30m` / `24h` / `7d`）；按 id 排序的列表用 `cursor`（上一页最后一条的 id）翻页。
+
+为了能把运行数据的变化归因到具体改动：
+- 快照默认每小时一次、保留 90 天（设置页可调）
+- 配置修改记入 `settings_updated` 事件（前后值，凭据脱敏）
+- 镜像构建时由 CI 注入 `GIT_SHA`，出现在 `/api/status`、`app_started` 事件与系统快照中
+- 任务失败/恢复记为 `job_failed` / `job_recovered` 事件（只在状态变化时记录）
 
 ### 经 Cloudflare Access 给脚本 / agent 访问
 
