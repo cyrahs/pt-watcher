@@ -9,6 +9,12 @@ export const env = {
   port: Number(process.env.PORT ?? 3000),
 };
 
+/** 版本标记（镜像构建时由 CI 注入 GIT_SHA），用于把运行数据对应到具体部署 */
+export const buildInfo = {
+  gitSha: process.env.GIT_SHA || null,
+  startedAt: new Date().toISOString(),
+};
+
 // ---- 行为配置: 存 settings 表，UI 可编辑，此处定义 schema 与默认值 ----
 // 连接类字段的环境变量仅作为 settings 表中尚无该值时的默认种子
 
@@ -60,6 +66,12 @@ export const settingsSchema = z.object({
   /** 上传速率 EMA 半衰期（秒）。默认 233s ≈ 旧 alpha=0.3 @ 120s 间隔的等价平滑强度 */
   uploadEmaHalfLifeSec: z.number().positive().default(233),
 
+  // 时间序列快照（供事后评估预测与趋势分析）
+  /** 受管种子快照间隔（秒）：每个间隔桶内的首轮 reconcile 落一次快照 */
+  snapshotIntervalSec: z.number().int().positive().default(3600),
+  /** 快照保留天数，0 = 永久保留 */
+  snapshotRetentionDays: z.number().nonnegative().default(90),
+
   // legacy 评分权重（旧 min-max 批内评分，仅用于对照方案与过渡展示，不再是清理排序契约）
   weightUpload: z.number().default(0.4),
   weightDemand: z.number().default(0.3),
@@ -98,6 +110,23 @@ export async function loadSettings(): Promise<Settings> {
 export function getSettings(): Settings {
   if (!cached) throw new Error("settings not loaded yet");
   return cached;
+}
+
+/** 含凭据的字段：变更记录只标记"已修改"，不记录值 */
+const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
+
+export type SettingsDiff = Record<string, { from: unknown; to: unknown }>;
+
+/** 两份配置的差异（供 settings_updated 事件记录，便于把行为变化归因到具体改动） */
+export function diffSettings(before: Settings, after: Settings): SettingsDiff {
+  const out: SettingsDiff = {};
+  for (const key of Object.keys(after) as (keyof Settings)[]) {
+    if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
+    out[key] = SECRET_KEYS.has(key)
+      ? { from: "<redacted>", to: "<redacted>" }
+      : { from: before[key], to: after[key] };
+  }
+  return out;
 }
 
 export async function saveSettings(patch: unknown): Promise<Settings> {

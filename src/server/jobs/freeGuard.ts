@@ -7,6 +7,20 @@ import { logEvent } from "../services/events";
 import { blockDownload } from "../services/downloadControl";
 
 /**
+ * 阻断原因：区分站点确认的到期与复核失败时的保守停止（后者可能是误停，需要单独统计）。
+ * - expired：站点返回的 free 未延期（已到期或已取消）
+ * - site_unavailable：站点复核拿不到结果（请求失败或种子已不存在）
+ * - no_site_adapter：该站点未配置，无法复核
+ */
+type StopReason = "expired" | "site_unavailable" | "no_site_adapter";
+
+const STOP_REASON_TEXT: Record<StopReason, string> = {
+  expired: "free 到期未完成",
+  site_unavailable: "free 即将到期且站点复核失败（保守停止）",
+  no_site_adapter: "free 即将到期且站点未配置无法复核（保守停止）",
+};
+
+/**
  * free 到期守卫：对已知站点信息（watcher 添加，或 discover 识别的手动添加）、
  * 仍在下载、free 有明确到期时间的种子，在到期前（提前量内）复核站点状态，
  * free 未延期则阻断下载，避免产生站点计费下载量。
@@ -38,12 +52,15 @@ export async function freeGuard(): Promise<void> {
 
     // 复核站点状态：free 可能被延长或转为不限时
     let extended = false;
+    let stopReason: StopReason = "no_site_adapter";
     if (row.siteId && row.siteTorrentId) {
       const adapter = getAdapter(row.siteId);
       if (adapter) {
+        stopReason = "site_unavailable";
         try {
           const detail = await adapter.getDetail(row.siteTorrentId);
           if (detail) {
+            stopReason = "expired";
             if (detail.freeEndTime === null) {
               // 变为不限时 free
               await db
@@ -52,6 +69,7 @@ export async function freeGuard(): Promise<void> {
                 .where(eq(schema.torrents.id, row.id));
               await logEvent("free_extended", `free 转为不限时: ${row.name}`, {
                 torrentRef: row.infoHash,
+                payload: { previousFreeEndTime: row.freeEndTime, freeEndTime: null },
               });
               extended = true;
             } else if (detail.freeEndTime.getTime() > deadline.getTime()) {
@@ -62,7 +80,10 @@ export async function freeGuard(): Promise<void> {
               await logEvent(
                 "free_extended",
                 `free 延期至 ${detail.freeEndTime.toISOString()}: ${row.name}`,
-                { torrentRef: row.infoHash },
+                {
+                  torrentRef: row.infoHash,
+                  payload: { previousFreeEndTime: row.freeEndTime, freeEndTime: detail.freeEndTime },
+                },
               );
               extended = true;
             }
@@ -89,8 +110,18 @@ export async function freeGuard(): Promise<void> {
       .where(eq(schema.torrents.id, row.id));
     await logEvent(
       "free_expired_stopped",
-      `free 到期未完成，已阻断下载（已有 ${(row.progress * 100).toFixed(1)}% 数据继续上传）: ${row.name}`,
-      { torrentRef: row.infoHash },
+      `${STOP_REASON_TEXT[stopReason]}，已阻断下载（已有 ${(row.progress * 100).toFixed(1)}% 数据继续上传）: ${row.name}`,
+      {
+        torrentRef: row.infoHash,
+        payload: {
+          reason: stopReason,
+          progress: row.progress,
+          sizeBytes: row.sizeBytes,
+          totalDownloadedBytes: row.totalDownloadedBytes,
+          totalUploadedBytes: row.totalUploadedBytes,
+          freeEndTime: row.freeEndTime,
+        },
+      },
     );
   }
 }

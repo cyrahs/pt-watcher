@@ -149,6 +149,13 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
     ],
   },
   {
+    title: "时间序列快照（供事后评估预测与趋势分析）",
+    fields: [
+      { key: "snapshotIntervalSec", label: "快照间隔（秒，默认 3600）", type: "number" },
+      { key: "snapshotRetentionDays", label: "保留天数（0 = 永久保留）", type: "number" },
+    ],
+  },
+  {
     title: "legacy 评分权重（旧模型，仅用于对照方案与过渡展示）",
     fields: [
       { key: "weightUpload", label: "上传速度权重", type: "number" },
