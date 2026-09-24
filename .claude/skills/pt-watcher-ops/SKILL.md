@@ -15,7 +15,7 @@ scripts/ptw-api.sh /api/status                            # 当前状态
 scripts/ptw-api.sh '/api/events?since=24h&type=clean_blocked'
 ```
 
-脚本在运行时用 `op read` 从 1Password 取 service token（默认条目 `op://pt-watcher/cloudflare-access`，字段 `client_id` / `client_secret` / `url`）。报错时按顺序排查：`op whoami`（1Password 是否可用）→ 条目/字段是否存在 → 目标域名是否在环境的网络白名单里 → HTTP 403 说明 Access 策略没有放行该 service token。本地开发用 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。
+脚本在运行时用 `op item get` 从 1Password 取 service token 与实例地址（默认 vault `Agent`、条目 `cloudflare access - claude code`，字段 `client_id` / `client_secret` 与一个 URL 类型字段），不需要设置环境变量。报错时按顺序排查：`op whoami`（1Password 是否可用）→ 条目/字段是否存在 → 目标域名是否在环境的网络白名单里 → 退出码 3（被重定向到 Access 登录页）说明 service token 无效或 Access 应用没有包含它的 Service Auth 策略。本地开发用 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。
 
 `GET /api` 是能力的唯一权威来源（有测试保证与路由一致）：参数、单位、时间格式、翻页规则都以它为准，不要凭记忆拼接口。
 
