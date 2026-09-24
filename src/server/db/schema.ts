@@ -102,6 +102,36 @@ export const evictionPlans = pgTable(
   (t) => [index("eviction_plans_created_idx").on(t.createdAt)],
 );
 
+// 受管种子的定时快照（时间序列）：reconcile 按 snapshotIntervalSec 降采样落库。
+// 某时刻的 expectedUploadBytes 对比之后一个预测窗口内 totalUploadedBytes 的实际增量，即可事后评估预测；
+// 种子被删除后不再有快照（结合 torrents.deleted_at 判断删失）
+export const torrentSnapshots = pgTable(
+  "torrent_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    ts: timestamp("ts", { withTimezone: true }).notNull(),
+    torrentId: integer("torrent_id").notNull(),
+    state: text("state").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    progress: doublePrecision("progress").notNull(),
+    totalUploadedBytes: bigint("total_uploaded_bytes", { mode: "number" }).notNull(),
+    totalDownloadedBytes: bigint("total_downloaded_bytes", { mode: "number" }).notNull(),
+    /** 上传速率 EMA（B/s）；null = 尚未由有效采样区间初始化 */
+    upEma: doublePrecision("up_ema"),
+    seeders: integer("seeders").notNull(),
+    leechers: integer("leechers").notNull(),
+    ratio: doublePrecision("ratio").notNull(),
+    expectedUploadBytes: doublePrecision("expected_upload_bytes"),
+    predictionKind: text("prediction_kind"),
+    /** 该预测对应的窗口（秒）；配置可能变更，按快照记录 */
+    predictionHorizonSec: integer("prediction_horizon_sec"),
+  },
+  (t) => [
+    index("torrent_snapshots_ts_idx").on(t.ts),
+    index("torrent_snapshots_torrent_ts_idx").on(t.torrentId, t.ts),
+  ],
+);
+
 export const events = pgTable(
   "events",
   {

@@ -1,7 +1,21 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { ZodError } from "zod";
-import { desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, ilike, inArray, lt, sql, type AnyColumn } from "drizzle-orm";
 import { db, schema } from "../db";
+import { apiConventions, endpointDocs } from "./docs";
+import {
+  escapeLike,
+  parseBool,
+  parseEnum,
+  parseIdList,
+  parseLimit,
+  parseList,
+  parseOffset,
+  parsePositiveInt,
+  parseTime,
+  parseTorrentRef,
+} from "./query";
 import { qbit, QbitClient } from "../qbit/client";
 import { getSettings, saveSettings } from "../config";
 import { MTeamAdapter } from "../pt/mteam";
@@ -16,9 +30,31 @@ import { dayKey } from "../services/traffic";
 export const api = new Hono();
 
 api.onError((err, c) => {
+  if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
   console.error("[api]", err);
   return c.json({ error: err.message }, 500);
 });
+
+const ORDERS = ["asc", "desc"] as const;
+type Order = (typeof ORDERS)[number];
+
+/** 按 id 游标翻页：cursor 为上一页最后一条的 id */
+function afterCursor(col: AnyColumn, cursor: number | undefined, order: Order) {
+  if (cursor == null) return undefined;
+  return order === "asc" ? gt(col, cursor) : lt(col, cursor);
+}
+
+function byId(col: AnyColumn, order: Order) {
+  return order === "asc" ? asc(col) : desc(col);
+}
+
+api.get("/", (c) =>
+  c.json({
+    name: "pt-watcher",
+    conventions: apiConventions,
+    endpoints: endpointDocs.map((d) => ({ ...d, path: `/api${d.path === "/" ? "" : d.path}` })),
+  }),
+);
 
 api.get("/status", async (c) => {
   const s = getSettings();
@@ -72,11 +108,90 @@ api.get("/plan", async (c) => {
   return c.json({ pressure: getDiskGuardState(), latest: rows[0] ?? null });
 });
 
+const TORRENT_SORT = {
+  addedAt: schema.torrents.addedAt,
+  id: schema.torrents.id,
+  name: schema.torrents.name,
+  sizeBytes: schema.torrents.sizeBytes,
+  upEma: schema.torrents.upEma,
+  expectedUploadBytes: schema.torrents.expectedUploadBytes,
+  totalUploadedBytes: schema.torrents.totalUploadedBytes,
+  ratio: schema.torrents.ratio,
+  seeders: schema.torrents.seeders,
+  leechers: schema.torrents.leechers,
+  freeEndTime: schema.torrents.freeEndTime,
+};
+const TORRENT_SORT_KEYS = Object.keys(TORRENT_SORT) as (keyof typeof TORRENT_SORT)[];
+
 api.get("/torrents", async (c) => {
-  const state = c.req.query("state");
-  const rows = state
-    ? await db.select().from(schema.torrents).where(eq(schema.torrents.state, state)).orderBy(desc(schema.torrents.addedAt))
-    : await db.select().from(schema.torrents).orderBy(desc(schema.torrents.addedAt));
+  const t = schema.torrents;
+  const states = parseList(c.req.query("state"));
+  const q = c.req.query("q")?.trim();
+  const col = TORRENT_SORT[parseEnum("sort", c.req.query("sort"), TORRENT_SORT_KEYS, "addedAt")];
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "desc");
+  const limitRaw = c.req.query("limit");
+  const offset = parseOffset(c.req.query("offset"));
+
+  let query = db
+    .select()
+    .from(t)
+    .where(
+      and(
+        states ? inArray(t.state, states) : undefined,
+        q ? ilike(t.name, `%${escapeLike(q)}%`) : undefined,
+      ),
+    )
+    .orderBy(
+      order === "asc" ? sql`${col} asc nulls last` : sql`${col} desc nulls last`,
+      byId(t.id, order),
+    )
+    .$dynamic();
+  // 不带 limit 保持旧行为：返回全部
+  if (limitRaw) query = query.limit(parseLimit(limitRaw, 0, 5000));
+  if (offset) query = query.offset(offset);
+  return c.json(await query);
+});
+
+api.get("/torrents/:ref", async (c) => {
+  const ref = parseTorrentRef(c.req.param("ref"));
+  const rows = await db
+    .select()
+    .from(schema.torrents)
+    .where(
+      "id" in ref ? eq(schema.torrents.id, ref.id) : eq(schema.torrents.infoHash, ref.infoHash),
+    );
+  const torrent = rows[0];
+  if (!torrent) return c.json({ error: "not found" }, 404);
+  const recentEvents = await db
+    .select()
+    .from(schema.events)
+    .where(eq(schema.events.torrentRef, torrent.infoHash))
+    .orderBy(desc(schema.events.id))
+    .limit(50);
+  return c.json({ torrent, recentEvents });
+});
+
+api.get("/snapshots", async (c) => {
+  const s = schema.torrentSnapshots;
+  const ids = parseIdList("torrentId", c.req.query("torrentId"));
+  const since = parseTime(c.req.query("since"));
+  const until = parseTime(c.req.query("until"));
+  const cursor = parsePositiveInt("cursor", c.req.query("cursor"));
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "asc");
+  const limit = parseLimit(c.req.query("limit"), 1000, 10000);
+  const rows = await db
+    .select()
+    .from(s)
+    .where(
+      and(
+        ids ? inArray(s.torrentId, ids) : undefined,
+        since ? gte(s.ts, since) : undefined,
+        until ? lt(s.ts, until) : undefined,
+        afterCursor(s.id, cursor, order),
+      ),
+    )
+    .orderBy(byId(s.id, order))
+    .limit(limit);
   return c.json(rows);
 });
 
@@ -160,15 +275,100 @@ api.get("/stats/site", async (c) => {
 });
 
 api.get("/events", async (c) => {
-  const limit = Math.min(Number(c.req.query("limit") ?? 100), 500);
-  const offset = Number(c.req.query("offset") ?? 0);
+  const e = schema.events;
+  const types = parseList(c.req.query("type"));
+  const torrentRef = c.req.query("torrentRef")?.trim().toLowerCase();
+  const since = parseTime(c.req.query("since"));
+  const until = parseTime(c.req.query("until"));
+  const cursor = parsePositiveInt("cursor", c.req.query("cursor"));
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "desc");
+  const limit = parseLimit(c.req.query("limit"), 100, 5000);
+  const offset = parseOffset(c.req.query("offset"));
   const rows = await db
     .select()
-    .from(schema.events)
-    .orderBy(desc(schema.events.ts))
+    .from(e)
+    .where(
+      and(
+        types ? inArray(e.type, types) : undefined,
+        torrentRef ? eq(e.torrentRef, torrentRef) : undefined,
+        since ? gte(e.ts, since) : undefined,
+        until ? lt(e.ts, until) : undefined,
+        afterCursor(e.id, cursor, order),
+      ),
+    )
+    .orderBy(byId(e.id, order))
     .limit(limit)
     .offset(offset);
   return c.json(rows);
+});
+
+const BUCKETS = ["none", "hour", "day"] as const;
+// 分桶按服务器时区对齐（与 traffic_daily 的日切一致，部署时由 TZ 环境变量决定）
+const SERVER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+api.get("/events/stats", async (c) => {
+  const e = schema.events;
+  const now = new Date();
+  const since = parseTime(c.req.query("since"), now) ?? new Date(now.getTime() - 86_400_000);
+  const until = parseTime(c.req.query("until"), now) ?? now;
+  const bucket = parseEnum("bucket", c.req.query("bucket"), BUCKETS, "none");
+  const types = parseList(c.req.query("type"));
+  const where = and(gte(e.ts, since), lt(e.ts, until), types ? inArray(e.type, types) : undefined);
+  const count = sql<number>`count(*)::int`;
+
+  const rows =
+    bucket === "none"
+      ? await db
+          .select({ type: e.type, count })
+          .from(e)
+          .where(where)
+          .groupBy(e.type)
+          .orderBy(e.type)
+      : await db
+          .select({
+            // bucket 已校验为枚举值，可安全内联；按序号分组避免参数化表达式在 GROUP BY 中不匹配
+            bucket: sql`date_trunc(${sql.raw(`'${bucket}'`)}, ${e.ts}, ${SERVER_TZ})`.mapWith(e.ts),
+            type: e.type,
+            count,
+          })
+          .from(e)
+          .where(where)
+          .groupBy(sql`1`, sql`2`)
+          .orderBy(sql`1`, sql`2`);
+  return c.json({ since, until, bucket, timeZone: SERVER_TZ, rows });
+});
+
+api.get("/plans", async (c) => {
+  const p = schema.evictionPlans;
+  const statuses = parseList(c.req.query("status"));
+  const dryRun = parseBool("dryRun", c.req.query("dryRun"));
+  const since = parseTime(c.req.query("since"));
+  const until = parseTime(c.req.query("until"));
+  const cursor = parsePositiveInt("cursor", c.req.query("cursor"));
+  const order = parseEnum("order", c.req.query("order"), ORDERS, "desc");
+  const limit = parseLimit(c.req.query("limit"), 50, 1000);
+  const rows = await db
+    .select()
+    .from(p)
+    .where(
+      and(
+        statuses ? inArray(p.status, statuses) : undefined,
+        dryRun != null ? eq(p.dryRun, dryRun) : undefined,
+        since ? gte(p.createdAt, since) : undefined,
+        until ? lt(p.createdAt, until) : undefined,
+        afterCursor(p.id, cursor, order),
+      ),
+    )
+    .orderBy(byId(p.id, order))
+    .limit(limit);
+  return c.json(rows);
+});
+
+api.get("/plans/:id", async (c) => {
+  const id = parsePositiveInt("id", c.req.param("id"))!;
+  const rows = await db.select().from(schema.evictionPlans).where(eq(schema.evictionPlans.id, id));
+  if (!rows[0]) return c.json({ error: "not found" }, 404);
+  return c.json(rows[0]);
 });
 
 api.get("/pt/categories", async (c) => {

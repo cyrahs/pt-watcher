@@ -21,6 +21,8 @@ async function main() {
 
   const app = new Hono();
   app.route("/api", api);
+  // 未知 API 路径返回 JSON 404，而不是落到下面的 SPA 回退返回 index.html
+  app.all("/api/*", (c) => c.json({ error: "not found", index: "/api" }, 404));
   app.use("/*", serveStatic({ root: "./dist/web" }));
   app.use("/*", serveStatic({ root: "./dist/web", path: "index.html" }));
 

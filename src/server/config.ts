@@ -60,6 +60,12 @@ export const settingsSchema = z.object({
   /** 上传速率 EMA 半衰期（秒）。默认 233s ≈ 旧 alpha=0.3 @ 120s 间隔的等价平滑强度 */
   uploadEmaHalfLifeSec: z.number().positive().default(233),
 
+  // 时间序列快照（供事后评估预测与趋势分析）
+  /** 受管种子快照间隔（秒）：每个间隔桶内的首轮 reconcile 落一次快照 */
+  snapshotIntervalSec: z.number().int().positive().default(3600),
+  /** 快照保留天数，0 = 永久保留 */
+  snapshotRetentionDays: z.number().nonnegative().default(90),
+
   // legacy 评分权重（旧 min-max 批内评分，仅用于对照方案与过渡展示，不再是清理排序契约）
   weightUpload: z.number().default(0.4),
   weightDemand: z.number().default(0.3),
