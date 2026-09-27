@@ -1,10 +1,11 @@
 import { and, eq, isNotNull, lt } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit } from "../qbit/client";
-import { getSettings } from "../config";
+import { getSettings, type Settings } from "../config";
 import { getAdapter } from "../pt/registry";
 import { logEvent } from "../services/events";
 import { blockDownload } from "../services/downloadControl";
+import { reclaimableBytes } from "./diskGuard";
 
 /**
  * 阻断原因：区分站点确认的到期与复核失败时的保守停止（后者可能是误停，需要单独统计）。
@@ -120,6 +121,62 @@ export async function freeGuard(): Promise<void> {
           totalDownloadedBytes: row.totalDownloadedBytes,
           totalUploadedBytes: row.totalUploadedBytes,
           freeEndTime: row.freeEndTime,
+        },
+      },
+    );
+  }
+
+  await purgeNoData(s, Date.now());
+}
+
+/**
+ * 无数据僵尸判定：阻断时进度为 0 的种子没有任何可上传的数据，可释放字节为 0，
+ * 清理规划按 zero_reclaim 永久排除，会一直留在 qBittorrent 里。
+ * free 截止后超过 purgeHours 仍无数据即删除；purgeHours = 0 关闭。
+ * 有数据（哪怕未完成）的阻断种子仍交给清理规划按价值处理。
+ */
+export function noDataPurgeDue(
+  row: { state: string; sizeBytes: number; progress: number; freeEndTime: Date | null },
+  now: number,
+  purgeHours: number,
+): boolean {
+  if (purgeHours <= 0 || row.state !== "stopped_free_expired" || row.freeEndTime === null) return false;
+  if (reclaimableBytes(row) > 0) return false;
+  return now - row.freeEndTime.getTime() >= purgeHours * 3600 * 1000;
+}
+
+/** 删除 free 截止后长期无数据的阻断种子；删除后为终态，再次 free 由 discover 按新周期重新入场 */
+async function purgeNoData(s: Settings, now: number): Promise<void> {
+  if (s.freeExpiredNoDataPurgeHours <= 0) return;
+  const rows = await db
+    .select()
+    .from(schema.torrents)
+    .where(eq(schema.torrents.state, "stopped_free_expired"));
+  for (const row of rows) {
+    if (!noDataPurgeDue(row, now, s.freeExpiredNoDataPurgeHours)) continue;
+    try {
+      await qbit.deleteTorrents([row.infoHash], true);
+    } catch (e) {
+      await logEvent("free_guard_error", `删除无数据种子失败: ${row.name}: ${String(e)}`, {
+        torrentRef: row.infoHash,
+      });
+      continue;
+    }
+    await db
+      .update(schema.torrents)
+      .set({ state: "deleted_by_cleanup", deletedAt: new Date(now) })
+      .where(eq(schema.torrents.id, row.id));
+    const hours = (now - row.freeEndTime!.getTime()) / 3600000;
+    await logEvent(
+      "free_expired_purged",
+      `free 截止 ${hours.toFixed(0)} 小时后仍无任何数据，已删除（可释放为 0，清理规划不会选中）: ${row.name}`,
+      {
+        torrentRef: row.infoHash,
+        payload: {
+          sizeBytes: row.sizeBytes,
+          freeEndTime: row.freeEndTime,
+          hoursSinceFreeEnd: Math.round(hours),
+          mechanism: (row.downloadBlock as { mechanism?: string } | null)?.mechanism ?? null,
         },
       },
     );

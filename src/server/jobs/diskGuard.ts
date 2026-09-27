@@ -159,8 +159,8 @@ export async function ensureFreshObservation(): Promise<void> {
 
 type TorrentRow = typeof schema.torrents.$inferSelect;
 
-/** 磁盘上实际占用的估计（未完成按进度折算；低置信度，见交接文稿 §9.3） */
-function reclaimableBytes(row: TorrentRow): number {
+/** 磁盘上实际占用的估计（未完成按进度折算；低置信度，见交接文稿 §9.3）。freeGuard 也用它判定"无数据"种子 */
+export function reclaimableBytes(row: Pick<TorrentRow, "sizeBytes" | "progress" | "state">): number {
   return Math.round(row.sizeBytes * (row.state === "completed" ? 1 : row.progress));
 }
 
