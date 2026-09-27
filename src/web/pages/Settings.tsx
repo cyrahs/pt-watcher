@@ -132,20 +132,27 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
       { key: "cleanEnabled", label: "启用自动清理", type: "boolean" },
       { key: "cleanDryRun", label: "dry-run 模式（只记录计划不真删，不模拟释放）", type: "boolean" },
       { key: "freeSpaceThresholdGB", label: "磁盘剩余空间阈值（GB）", type: "number" },
-      { key: "newTorrentProtectHours", label: "新种探索保护期（小时，有界：无可行方案时降级动用）", type: "number" },
+      { key: "newTorrentProtectHours", label: "新种探索保护期（小时，默认 24；有界：无可行方案时降级动用）", type: "number" },
       { key: "diskObservationMaxAgeSec", label: "空间观测最大有效期（秒，过期观测不授权删除）", type: "number" },
       { key: "releaseConfirmWindowSec", label: "释放确认窗口（秒，到期未到账即进入异常态停删）", type: "number" },
     ],
   },
   {
     title: "free 到期守卫（只阻断下载，已有数据继续上传）",
-    fields: [{ key: "freeStopLeadMinutes", label: "到期前提前阻断（分钟）", type: "number" }],
+    fields: [
+      { key: "freeStopLeadMinutes", label: "到期前提前阻断（分钟）", type: "number" },
+      {
+        key: "freeExpiredNoDataPurgeHours",
+        label: "阻断后仍无数据的种子在 free 截止 N 小时后自动删除（0 = 不删；默认 24。这类种子可释放为 0，清理规划不会选中）",
+        type: "number",
+      },
+    ],
   },
   {
     title: "价值估计",
     fields: [
       { key: "predictionHorizonSec", label: "统一预测窗口（秒，默认 86400 = 24h）", type: "number" },
-      { key: "uploadEmaHalfLifeSec", label: "上传速率 EMA 半衰期（秒）", type: "number" },
+      { key: "uploadEmaHalfLifeSec", label: "上传速率 EMA 半衰期（秒，默认 21600 = 6h；清理按它排序，太短会把瞬时闲置当成无价值）", type: "number" },
     ],
   },
   {

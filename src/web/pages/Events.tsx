@@ -15,6 +15,7 @@ const TYPE_CLS: Record<string, string> = {
   clean_insufficient: "warn",
   discover_skipped: "warn",
   cleaned: "bad",
+  free_expired_purged: "bad",
   manual_delete: "bad",
   removed_external: "muted",
   discover_error: "bad",

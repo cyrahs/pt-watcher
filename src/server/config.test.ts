@@ -3,6 +3,19 @@ import { diffSettings, settingsSchema } from "./config";
 
 const base = settingsSchema.parse({ mtApiKey: "old-key", qbitApiKey: "q" });
 
+describe("settingsSchema 默认值", () => {
+  test("基于线上数据调整的默认值（IMPLEMENTATION_NOTES §7）", () => {
+    const s = settingsSchema.parse({});
+    expect(s.uploadEmaHalfLifeSec).toBe(21600);
+    expect(s.newTorrentProtectHours).toBe(24);
+    expect(s.freeExpiredNoDataPurgeHours).toBe(24);
+  });
+
+  test("已保存的配置值优先于代码默认值", () => {
+    expect(settingsSchema.parse({ uploadEmaHalfLifeSec: 233 }).uploadEmaHalfLifeSec).toBe(233);
+  });
+});
+
 describe("diffSettings", () => {
   test("只列出变化的字段，记录前后值", () => {
     const after = { ...base, freeSpaceThresholdGB: 150, cleanDryRun: false };

@@ -35,15 +35,15 @@
 - `freeGuard.ts` — `stopTorrents` → `blockDownload(row, "free_expired")`；语义为只阻断下载、保留上传。
 - `reconcile.ts` — EMA 改为累计计数差分 + dt 半衰期混合；计数回退/dt≤0 跳过采样只重建基线；收养行不再用瞬时 upspeed 伪造均线（`emaInitialized=false`）；`stopped_free_expired` 状态粘滞（filePrio 会让 qBit 报 progress=1，不能据此判完成），且冻结 sizeBytes/progress（filePrio 改变 qBit 已选体积口径）。
 - `qbit/client.ts` — `freeSpaceOnDisk` 返回 `number | null`（缺失 ≠ 0）；新增 `torrentFiles` / `setFilePrio`。
-- `config.ts` — 新增 `diskCheckIntervalSec(5)`、`diskObservationMaxAgeSec(20)`、`releaseConfirmWindowSec(90)`（取代早期的 `maxDeletesPerEpisode`/`deleteSettleTimeoutSec`，旧 JSON 中的这两个键会被忽略）、`predictionHorizonSec(86400)`、`uploadEmaHalfLifeSec(233)`；`spaceCleanIntervalSec` 保留但标记 deprecated（兼容旧 JSON）；旧权重字段保留、注释标 legacy。
+- `config.ts` — 新增 `diskCheckIntervalSec(5)`、`diskObservationMaxAgeSec(20)`、`releaseConfirmWindowSec(90)`（取代早期的 `maxDeletesPerEpisode`/`deleteSettleTimeoutSec`，旧 JSON 中的这两个键会被忽略）、`predictionHorizonSec(86400)`、`uploadEmaHalfLifeSec(233，后按线上数据调整为 21600，见 §7)`；`spaceCleanIntervalSec` 保留但标记 deprecated（兼容旧 JSON）；旧权重字段保留、注释标 legacy。
 - `routes.ts` — `/status` 增加 `pressure`；新增 `GET /plan`（最近计划 + 压力状态）；手动 `start` 走 `clearAllBlocks`（用户显式操作视为接受非 free 计费）。
 - `schema.ts` + `drizzle/0002_*.sql` — torrents 增 `ema_initialized / expected_upload_bytes / prediction_kind / predicted_at / download_block`；seen 增 `free_end_time`；新表 `eviction_plans`。迁移含回填：`up_ema>0 → ema_initialized=true`；存量 `stopped_free_expired` → `download_block={reasons:["free_expired"],mechanism:"stopped"}`（如实记录旧机制）。
 - 前端 — `Torrents.tsx`：删掉按 score 升序模拟清理顺序；新增清理计划面板（后端实际计划；HEALTHY 显示"当前无需清理"；dry-run 标"演练模式，不会执行"）；评分列改为"预计上传"（窗口内字节，tooltip 带预测类型/legacy 分/预测时间）。`Dashboard.tsx`：磁盘卡片压力徽标。`Settings.tsx`：新字段分组、legacy 权重改名、`spaceClean` 间隔换成 `diskGuard`。
 
 ## 3. EMA 半衰期迁移换算
 
-旧行为：alpha=0.3、reconcile 默认 120s → 等价半衰期 `-120·ln2/ln0.7 ≈ 233.2s`，即新默认 `uploadEmaHalfLifeSec=233`。
-**若实例的 reconcileIntervalSec 不是 120，应手动按 `-interval·ln2/ln0.7` 换算填入**，以保留原平滑强度；此后再改采样间隔不影响半衰期。
+旧行为：alpha=0.3、reconcile 默认 120s → 等价半衰期 `-120·ln2/ln0.7 ≈ 233.2s`，一期默认 `uploadEmaHalfLifeSec=233` 就是这个迁移等价值。
+线上数据表明几分钟的记忆对 24h 预测窗口太短（见 §7），**默认值已改为 21600（6h）**；若要复现旧的平滑强度，按 `-interval·ln2/ln0.7` 换算填入即可。半衰期按真实时间差计算，改采样间隔不影响它。
 
 legacy `ageHalfLifeDays` 未改公式（真实半衰期 = 14·ln2 ≈ 9.7 天），仅在 UI 改名为"衰减时间常数（e-folding）"——选择"改名不改行为"路线（§8.6 两个选项之一）；新价值模型不使用该参数。
 
@@ -70,3 +70,16 @@ legacy `ageHalfLifeDays` 未改公式（真实半衰期 = 14·ln2 ≈ 9.7 天）
 - 模型层：规划器保留 `legacy_score_asc` 对照策略；把其余策略视为不可用即回到近似旧排序（但不会恢复 free 到期硬优先/预留——按设计文稿回退原则，这些业务语义不回退）。
 - 执行层：`cleanEnabled=false` 停止一切删除（压力状态与新增暂缓仍生效）；`cleanDryRun=true` 全程演练。
 - 熔断 BLOCKED 的解除条件：实测空间恢复到阈值以上（含手动删种腾出空间）；异常态（释放未到账 / 删除未确认）在到账追上或种子消失后自动解除，规划不可行在候选变化后自动解除。释放确实不落地（错卷、硬链接等）时会一直停在异常态，需要人工处理。
+
+## 7. 基于线上数据的默认值调整与无数据种子清理（2026-09-27）
+
+数据窗口：种子/系统快照 2026-09-24 19:28 ～ 09-27 17:04（约 2.9 天，10198 条种子快照、248 份带完整候选的清理计划），事件与终态记录自 8 月 28 日起；配置自 9 月 2 日未变，期间只有 9 月 24 日一次版本切换。结论：
+
+- **上传强烈前置且高度集中。** 每 GB 体积的小时上传率：0–1h 23.5 MB → 3–6h 17.7 → 6–12h 7.1 → 12–24h 4.8 → 24–48h 7.8 → 48–72h 1.7 → 72h+ 0.1。按年龄分上传份额 0–6h 35%、6–24h 27%、24–48h 33%、48h+ 5%；前 5% 的种子贡献 65% 上传。
+- **清理的有效策略是"删闲置最久的一个"。** 缺口中位 0.37 GB，四种启发式经去冗余与单项替换后全部收敛到 lossValue 最小的单个种子（248/248 份计划各方案总损失相同），`strategy` 字段永远显示 `legacy_score_asc` 只是稳定排序的副作用。lossValue = EMA × 24h，半衰期 233s 只记住最近几分钟，因此排序 ≈ 闲置时长。
+- **233s 的问题在底部。** 24h 窗口可评估 2452 条预测（7743 条因删除删失）：Σ预测/Σ实际 = 1.85（几分钟的爆发被外推成一天）；42% 的预测 < 1 MB，但这批之后 24h 实际平均上传 126 MB；被保留候选中损失值 < 1 KB 的一档实际上传 381 MB，高于 1–100 MB 档的 140 MB。头部分得开（预测最高十分位实际中位 1.7 GB），底部排序是噪声。
+- **决策层对比**（每批 ≥ 20 个年龄 ≥ 6h 的候选、30 批；看各预测器"最先删的 1 个 / 最先删的 10%"在之后 24h 的实际上传，越小越好）：当前模型 89 / 123 MB；EMA 半衰期 6h 52 / 41 MB；max(EMA, 近 24h 均速) 54 / 41 MB；最老优先 190 / 83 MB；随机 2017 / 4519 MB。6h 窗口同样成立（39 / 22 MB → 21 / 15 MB）。删失偏差：真正被删的种子不在可评估集合里，各预测器在同一存活样本上比较。→ `uploadEmaHalfLifeSec` 默认 233 → 21600。EMA 是按真实时间差的时间感知实现，采样间隔不变时只是记忆变长；新种在保护期内不参与删除，冷启动期间的低 EMA 不构成风险。
+- **保护期从未成为约束。** 每份计划的未保护候选至少 69 个（p10），1735 份计划无一动用保护期种子；而 9 月 24 日以来 248 次删除中 111 次（45%）删的是不到 24h 的种子。→ `newTorrentProtectHours` 默认 6 → 24，零成本。
+- **无数据僵尸。** free 到期阻断时进度为 0 的种子（一个月 7 次阻断中 5 次；通常是入场时只有 1 个做种且很快消失）没有任何数据，可释放字节为 0，规划器按 `zero_reclaim` 永久排除，qBittorrent 里已积累 6 个（126～669 小时）。新增 `freeExpiredNoDataPurgeHours`（默认 24）：free 截止后超过 N 小时仍无数据即删除，记 `free_expired_purged` 事件；删除后为终态，再次 free 由 discover 按新周期正常重新入场（`seen` 只对同周期防抖）。有数据的阻断种子仍交给清理规划按价值处理。
+- **上行带宽是硬顶。** 小时采样上传速度 p50 3.5 MB/s、p90 4.5、最高 4.8，29% 的采样 ≥ 4.0；部署所在网络上行 35 Mbps（≈ 4.4 MB/s），高峰时段已饱和，UTC 12–16 时低谷 1.4～1.9 MB/s。饱和时段删哪个种子都不影响总上传，上述模型改进只在非饱和时段起作用；更换网络后应重新评估。入场侧不是瓶颈：3 天内站点给出的限时 free 全部入场（无 ranked_out / deferred）。
+- **部署注意。** `saveSettings` 落库的是完整合并对象，已保存过配置的实例不会跟随代码默认值变化：升级后需在设置页或 `PUT /api/settings` 显式改 `uploadEmaHalfLifeSec` / `newTorrentProtectHours`；`freeExpiredNoDataPurgeHours` 是新键，旧 JSON 缺失时取默认值生效。

@@ -28,7 +28,7 @@ scripts/ptw-api.sh '/api/events?since=24h&type=clean_blocked'
 - `/api/snapshots/system`：同间隔的系统时间序列：剩余空间、受管占用、全局速度、压力状态、各状态种子数、站点账号数据（`siteStats`：上传/下载/分享率/魔力值，这是真正的优化目标）、部署版本 `gitSha`。
 - `/api/discover/candidates`：站点 free 列表里每个种子每个 free 周期一行。`seeders/leechers/snatched` 是首次看到时（入场时）的值，`last*` 是最近一次看到时的值；`decision` 是最近一次决策（`added` / `existing` 为终局，之后不再覆盖），`addedAt`、`infoHash` 标记是否入场并可与 `/api/torrents` 关联。被过滤、排名靠后、磁盘压力暂缓的候选也在这里。
 - 变更与版本：`settings_updated` 事件的 `payload.changes` 记录每次配置修改的前后值；`app_started` 事件与系统快照的 `gitSha` 标记部署版本。做前后对比时按这两者切分时间段，不要跨越变更点混在一起算。
-- 关键事件带结构化 `payload`：`added`（入场特征与名次）、`free_expired_stopped`（`reason`：`expired` 为站点确认到期，`site_unavailable` / `no_site_adapter` 为复核失败的保守停止，可能是误停）、`cleaned` / `clean_dry_run`（`planId` 关联到计划）、`space_recovered`、`discover_deferred`、`job_failed` / `job_recovered`。
+- 关键事件带结构化 `payload`：`added`（入场特征与名次）、`free_expired_stopped`（`reason`：`expired` 为站点确认到期，`site_unavailable` / `no_site_adapter` 为复核失败的保守停止，可能是误停）、`free_expired_purged`（阻断后仍无数据的种子在 free 截止 N 小时后被自动删除，`hoursSinceFreeEnd`；不是空间清理，不关联计划）、`cleaned` / `clean_dry_run`（`planId` 关联到计划）、`space_recovered`、`discover_deferred`、`job_failed` / `job_recovered`。
 - 设计背景与已知限制见 `docs/IMPLEMENTATION_NOTES.md`。
 
 ## 批量拉取
