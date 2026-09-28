@@ -15,7 +15,11 @@ scripts/ptw-api.sh /api/status                            # 当前状态
 scripts/ptw-api.sh '/api/events?since=24h&type=clean_blocked'
 ```
 
-脚本在运行时用 `op item get` 从 1Password 取 service token 与实例地址（默认 vault `Agent`、条目 `cloudflare access - claude code`，字段 `client_id` / `client_secret` 与一个 URL 类型字段），不需要设置环境变量。报错时按顺序排查：`op whoami`（1Password 是否可用）→ 条目/字段是否存在 → 目标域名是否在环境的网络白名单里 → 退出码 3（被重定向到 Access 登录页）说明 service token 无效或 Access 应用没有包含它的 Service Auth 策略。本地开发用 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。
+凭据有两种来源，脚本自动选择：
+- **环境代理注入（优先）**：Claude Code 云环境把 Access service token 配成出站代理自动注入的凭据，请求本身不带 token。需要环境变量 `PTW_URL`（实例根地址，仓库公开所以不写进代码；在环境设置里配置，或从项目记忆里取后临时 `export`）。
+- **1Password 回退**：没有 `PTW_URL`，或直接请求被重定向到 Access 登录页且环境里有 `op` 时，用 `op item get` 取 service token 与实例地址（默认 vault `Agent`、条目 `cloudflare access - claude code`，字段 `client_id` / `client_secret` 与一个 URL 类型字段）。
+
+报错时按顺序排查：退出码 2 且提示找不到实例地址 → 设置 `PTW_URL` → 目标域名是否在环境的网络白名单 / 凭据注入列表里 → 退出码 3（被重定向到 Access 登录页）说明代理没有注入 token 且 1Password 不可用（`op whoami`），或 service token 无效 / Access 应用没有包含它的 Service Auth 策略。本地开发用 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。
 
 `GET /api` 是能力的唯一权威来源（有测试保证与路由一致）：参数、单位、时间格式、翻页规则都以它为准，不要凭记忆拼接口。
 
