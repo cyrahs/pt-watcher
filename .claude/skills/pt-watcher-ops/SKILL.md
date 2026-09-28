@@ -16,7 +16,7 @@ scripts/ptw-api.sh '/api/events?since=24h&type=clean_blocked'
 ```
 
 凭据有两种来源，脚本自动选择：
-- **环境代理注入（优先）**：Claude Code 云环境把 Access service token 配成出站代理自动注入的凭据，请求本身不带 token。需要环境变量 `PTW_URL`（实例根地址，仓库公开所以不写进代码；在环境设置里配置，或从项目记忆里取后临时 `export`）。
+- **环境代理注入（优先）**：Claude Code 云环境把 Access service token 配成出站代理自动注入的凭据，请求本身不带 token。需要 `PTW_URL`（实例根地址，仓库公开所以不写进代码）：环境变量里没有时，从会话上下文里代理注入凭据的主机列表找到实例域名，`export PTW_URL=https://<该域名>` 后再调用。
 - **1Password 回退**：没有 `PTW_URL`，或直接请求被重定向到 Access 登录页且环境里有 `op` 时，用 `op item get` 取 service token 与实例地址（默认 vault `Agent`、条目 `cloudflare access - claude code`，字段 `client_id` / `client_secret` 与一个 URL 类型字段）。
 
 报错时按顺序排查：退出码 2 且提示找不到实例地址 → 设置 `PTW_URL` → 目标域名是否在环境的网络白名单 / 凭据注入列表里 → 退出码 3（被重定向到 Access 登录页）说明代理没有注入 token 且 1Password 不可用（`op whoami`），或 service token 无效 / Access 应用没有包含它的 Service Auth 策略。本地开发用 `PTW_URL=http://localhost:3000 PTW_NO_ACCESS=1`。
