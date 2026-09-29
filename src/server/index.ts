@@ -5,6 +5,7 @@ import { buildInfo, env, getSettings, loadSettings } from "./config";
 import { logEvent } from "./services/events";
 import { SNAPSHOT_CHECK_INTERVAL_SEC, snapshotTick } from "./jobs/snapshot";
 import { api } from "./api/routes";
+import { handleMcpRequest } from "./mcp/server";
 import { registerJob, startScheduler } from "./jobs/scheduler";
 import { discover } from "./jobs/discover";
 import { freeGuard } from "./jobs/freeGuard";
@@ -29,6 +30,8 @@ async function main() {
   app.route("/api", api);
   // 未知 API 路径返回 JSON 404，而不是落到下面的 SPA 回退返回 index.html
   app.all("/api/*", (c) => c.json({ error: "not found", index: "/api" }, 404));
+  // MCP（streamable HTTP）：同一套 /api 能力的工具化封装，经 LiteLLM MCP 网关给 agent 用
+  app.all("/mcp", (c) => handleMcpRequest(c.req.raw, api));
   app.use("/*", serveStatic({ root: "./dist/web" }));
   app.use("/*", serveStatic({ root: "./dist/web", path: "index.html" }));
 
