@@ -126,7 +126,7 @@ export function getSettings(): Settings {
 }
 
 /** 含凭据的字段：变更记录只标记"已修改"，不记录值 */
-const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
+export const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
 
 export type SettingsDiff = Record<string, { from: unknown; to: unknown }>;
 

@@ -11,6 +11,7 @@
 - **基于分类的管辖**：受管分类内的**全部**种子（含手动添加的，自动「收养」）参与流行度排序与清理；托管与分类强绑定：把种子移出受管分类即**脱管**，不再被自动停止/删除；移回受管分类自动重新纳管
 - **Web UI**：概览（磁盘空间/任务状态）、种子列表（来源/状态/评分/free 剩余 + 手动操作）、事件日志、全部行为配置在线编辑
 - **HTTP API**：UI 的全部能力 + 过滤/翻页/历史查询 + 种子与系统时间序列 + 发现候选日志，`GET /api` 返回自描述索引；可经 Cloudflare Access service token 供脚本与 agent 访问（见下文）
+- **MCP server**：`/mcp` 把 API 按用途封装成 MCP 工具，供 agent 经 LiteLLM MCP 网关使用（见下文）
 
 ## 流行度评分
 
@@ -84,6 +85,17 @@ bun run build      # 前端产物到 dist/web，由后端静态托管
 - 配置修改记入 `settings_updated` 事件（前后值，凭据脱敏）
 - 镜像构建时由 CI 注入 `GIT_SHA`，出现在 `/api/status`、`app_started` 事件与系统快照中
 - 任务失败/恢复记为 `job_failed` / `job_recovered` 事件（只在状态变化时记录）
+
+### MCP
+
+`POST /mcp` 是同一套能力的 MCP server（streamable HTTP，无状态，JSON 响应）：18 个工具按用途封装上表接口，在进程内调用 `/api` 路由，参数校验、分页与错误语义与 REST 一致（测试保证每个工具指向实际路由）。
+
+- 只读：`get_status`、`get_latest_plan`、`list_torrents`、`get_torrent`、`get_torrent_snapshots`、`get_system_snapshots`、`list_events`、`get_event_stats`、`list_plans`、`get_plan`、`list_discover_candidates`、`get_traffic_stats`、`get_site_stats`、`list_site_categories`、`get_settings`
+- 写：`update_settings`（部分更新；不能改凭据字段）、`torrent_action`（stop / start / delete，标记为 destructive）、`run_job`
+- 凭据字段（`mtApiKey` / `qbitApiKey`）在返回里脱敏
+- 列表类工具默认 limit 比 REST 小（种子 50、时间序列 200、事件 / 候选 100、清理计划 3），避免一次塞满 agent 上下文；需要更多时显式传 limit 或按 cursor 翻页
+
+集群内由 LiteLLM MCP 网关经 Service 地址（`http://pt-watcher.<namespace>.svc.cluster.local/mcp`）接入，agent 用 LiteLLM key 访问网关；经公网域名访问 `/mcp` 与 `/api` 一样受 Cloudflare Access 保护。
 
 ### 经 Cloudflare Access 给脚本 / agent 访问
 
