@@ -15,7 +15,7 @@ import {
 } from "../services/discoverLog";
 import { unblockDownload } from "../services/downloadControl";
 import { ensureFreshObservation, isAdditionAllowed, getDiskGuardState } from "./diskGuard";
-import { ACTIVE_STATES } from "./reconcile";
+import { ACTIVE_STATES, whereStillActive } from "./reconcile";
 
 const GB = 1024 ** 3;
 
@@ -123,7 +123,7 @@ async function resumeReFreed(allFound: FreeTorrent[], now: number): Promise<void
       await db
         .update(schema.torrents)
         .set({ state: "downloading", freeEndTime: t.freeEndTime })
-        .where(eq(schema.torrents.id, row.id));
+        .where(whereStillActive(row.id));
       await logEvent(
         "free_reentered",
         `再次进入 free，恢复下载（复用已有 ${(row.progress * 100).toFixed(1)}% 数据）: ${row.name}`,

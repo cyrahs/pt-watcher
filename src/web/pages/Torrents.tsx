@@ -80,6 +80,7 @@ function PlanPanel({ plan }: { plan: PlanResponse | null }) {
             {formatBytes(plan.latest!.plan.expectedTotalReclaim)} · 计划时间{" "}
             {formatRelative(plan.latest!.createdAt)}
             {plan.latest!.plan.usedProtected ? " · 已降级动用保护期候选" : ""}
+            {plan.latest!.plan.usedOversized ? " · 已降级动用超大候选" : ""}
             {plan.pressure.pendingReleaseBytes > 0
               ? ` · 待到账释放 ${formatBytes(plan.pressure.pendingReleaseBytes)}`
               : ""}

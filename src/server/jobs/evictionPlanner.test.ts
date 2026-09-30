@@ -142,4 +142,42 @@ describe("planEviction", () => {
     expect(plan.chosen.map((c) => c.id)).toEqual([2, 1]);
     expect(plan.chosen[0]!.evictionRank).toBe(1);
   });
+
+  test("小缺口不删超大种：线上事故 9/30，为补 3.4 GiB 删了 303 GiB", () => {
+    // 按损失代理，单删大种（97）比删两个小种（72 + 78）便宜，但大种的损失严重低估
+    const huge = cand({ id: 1, lossValue: 97, reclaimableBytes: 303 * GiB });
+    const s1 = cand({ id: 2, lossValue: 72, reclaimableBytes: 2.2 * GiB });
+    const s2 = cand({ id: 3, lossValue: 78, reclaimableBytes: 2.3 * GiB });
+    const plan = planEviction([huge, s1, s2], 3.4 * GiB, "bytes");
+    expect(plan.status).toBe("feasible");
+    expect(plan.chosen.map((c) => c.id).sort()).toEqual([2, 3]);
+    expect(plan.usedOversized).toBe(false);
+  });
+
+  test("余量随缺口放大：大缺口仍可删对应体量的种子", () => {
+    const big = cand({ id: 1, lossValue: 1, reclaimableBytes: 150 * GiB });
+    const small = cand({ id: 2, lossValue: 50, reclaimableBytes: 80 * GiB });
+    const plan = planEviction([big, small], 80 * GiB, "bytes");
+    expect(plan.chosen.map((c) => c.id)).toEqual([1]);
+    expect(plan.usedOversized).toBe(false);
+  });
+
+  test("只有超大种能覆盖缺口时降级动用并标记", () => {
+    const huge = cand({ id: 1, reclaimableBytes: 303 * GiB });
+    const small = cand({ id: 2, reclaimableBytes: 1 * GiB });
+    const plan = planEviction([huge, small], 3 * GiB, "bytes");
+    expect(plan.status).toBe("feasible");
+    expect(plan.chosen.map((c) => c.id)).toEqual([1]);
+    expect(plan.usedOversized).toBe(true);
+    expect(plan.usedProtected).toBe(false);
+  });
+
+  test("先放宽超大候选，再动用保护期内的新种", () => {
+    const huge = cand({ id: 1, lossValue: 5, reclaimableBytes: 303 * GiB });
+    const young = cand({ id: 2, lossValue: 0.1, reclaimableBytes: 5 * GiB, protectedByAge: true });
+    const plan = planEviction([huge, young], 3 * GiB, "bytes");
+    expect(plan.chosen.map((c) => c.id)).toEqual([1]);
+    expect(plan.usedOversized).toBe(true);
+    expect(plan.usedProtected).toBe(false);
+  });
 });
