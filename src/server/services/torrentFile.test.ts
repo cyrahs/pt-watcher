@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { infoHashFromTorrent } from "./torrentFile";
+import { infoHashFromTorrent, torrentContentName } from "./torrentFile";
 
 function enc(s: string): Uint8Array {
   return new TextEncoder().encode(s);
@@ -28,5 +28,22 @@ describe("infoHashFromTorrent", () => {
   test("rejects non-torrent data", async () => {
     await expect(infoHashFromTorrent(enc("not a torrent"))).rejects.toThrow();
     await expect(infoHashFromTorrent(enc("d4:name2:hie"))).rejects.toThrow("no info dict");
+  });
+});
+
+describe("torrentContentName", () => {
+  test("returns info.name", () => {
+    const torrent = "d4:infod5:filesld6:lengthi1e4:pathl1:aeee4:name12:Bitchinbubba12:piece lengthi16384eee";
+    expect(torrentContentName(enc(torrent))).toBe("Bitchinbubba");
+  });
+
+  test("prefers name.utf-8 and ignores names outside info", () => {
+    // 中文 是 6 个 UTF-8 字节
+    const torrent = "d4:name5:outer4:infod4:name3:raw10:name.utf-86:中文ee";
+    expect(torrentContentName(enc(torrent))).toBe("中文");
+  });
+
+  test("rejects torrents without a name", () => {
+    expect(() => torrentContentName(enc("d4:infod6:lengthi1eee"))).toThrow("no name");
   });
 });

@@ -1,10 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
-import { qbit } from "../qbit/client";
+import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings, type Settings } from "../config";
 import { getAdapters } from "../pt/registry";
 import type { FreeTorrent } from "../pt/types";
-import { infoHashFromTorrent } from "../services/torrentFile";
+import { infoHashFromTorrent, torrentContentName } from "../services/torrentFile";
 import { logEvent } from "../services/events";
 import { demandHeuristic } from "../services/value";
 import { isNewFreeCycle } from "../services/freeCycle";
@@ -99,6 +99,21 @@ export function rankCandidates(list: FreeTorrent[]): FreeTorrent[] {
     if (at !== bt) return at - bt;
     return a.torrentId < b.torrentId ? -1 : a.torrentId > b.torrentId ? 1 : 0;
   });
+}
+
+/**
+ * qBittorrent 中已被占用的内容根名称 → 占用它的种子名。
+ * 取 content_path 的最后一段（缺字段时退回种子名）；不区分分类和保存路径，宁可多拦。
+ */
+export function contentRootIndex(
+  infos: Pick<QbitTorrentInfo, "name" | "content_path">[],
+): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const q of infos) {
+    const root = q.content_path?.split(/[\\/]/).filter(Boolean).pop() ?? q.name;
+    if (root && !index.has(root)) index.set(root, q.name);
+  }
+  return index;
 }
 
 /** 再次 free：恢复被 free 到期阻断的种子的下载（保留部分数据续下，§6.2） */
@@ -236,6 +251,10 @@ async function evaluate(
     .slice(s.maxAddPerRun)
     .forEach((t, i) => note(t, "ranked_out", { rank: s.maxAddPerRun + i + 1 }));
 
+  // 内容根名称占用表：不同站点种子可能是同一份内容，落到同一目录会共用文件，
+  // 删除其中一个（连同文件）会把另一个变成没有数据的空壳
+  let contentRoots: Map<string, string> | null = null;
+
   for (const [i, t] of batch.entries()) {
     const rank = i + 1;
     try {
@@ -306,6 +325,20 @@ async function evaluate(
         continue;
       }
 
+      contentRoots ??= contentRootIndex(await qbit.torrentsInfo());
+      const contentName = torrentContentName(file);
+      const clash = contentRoots.get(contentName);
+      if (clash !== undefined) {
+        await logEvent(
+          "discover_skipped",
+          `内容目录「${contentName}」已被 qBittorrent 中的「${clash}」占用，跳过以免共用文件: ${t.name}`,
+          { torrentRef: infoHash, payload: { siteId: t.siteId, siteTorrentId: t.torrentId, contentName } },
+        );
+        await markSeen(t.siteId, t.torrentId, t.freeEndTime);
+        note(t, "filtered", { reason: `content_path_conflict: ${contentName}`, rank, infoHash });
+        continue;
+      }
+
       await qbit.addTorrentFile(file, {
         filename: `${t.siteId}-${t.torrentId}.torrent`,
         category: s.incomingCategory,
@@ -324,6 +357,7 @@ async function evaluate(
         seeders: t.seeders,
         leechers: t.leechers,
       });
+      contentRoots.set(contentName, t.name);
       await markSeen(t.siteId, t.torrentId, t.freeEndTime);
       note(t, "added", { rank, infoHash });
       await logEvent(

@@ -17,6 +17,8 @@ export interface QbitTorrentInfo {
   category: string;
   tags: string;
   state: string;
+  /** 内容的绝对路径（多文件为根目录，单文件为文件本身） */
+  content_path?: string;
 }
 
 export interface QbitCredentials {
