@@ -4,6 +4,8 @@
  * 近似目标（交接文稿 §9.1）：
  *   minimize Σ lossValue_i  s.t.  Σ reclaimableBytes_i >= needBytes
  *
+ * 候选池分层：默认避开保护期内的新种和单项释放远超缺口的大种，覆盖不了缺口时逐层放宽。
+ *
  * 一期实现 §9.5：多启发式生成方案（legacy 对照 / 损失密度 / 剩余缺口修正 / 单项覆盖），
  * 去冗余 + 有界单项替换，最后统一比较（总损失 → 超额释放 → 数量 → 稳定 ID）。
  * 只声称在同一模型和已生成方案中选到较好结果，不保证全局最优。
@@ -54,11 +56,20 @@ export interface EvictionPlan {
   }[];
   /** 是否降级动用了保护期候选 */
   usedProtected: boolean;
+  /** 是否降级动用了单项释放远超缺口的大种（见 OVERSIZE_ALLOWANCE_BYTES） */
+  usedOversized: boolean;
   exclusions: { id: number; reason: string }[];
   reason?: string;
 }
 
 const LOSS_TOLERANCE = 1e-9;
+
+/**
+ * 超额释放余量：单项可释放超过「缺口 + max(缺口, 本值)」的候选默认避开。
+ * 损失代理只看预测窗口内的上传，对长期稳定出上传的大种会严重低估；
+ * 为补几 GB 缺口删掉几百 GB 的种子，一旦估错就是整份数据的损失。
+ */
+export const OVERSIZE_ALLOWANCE_BYTES = 32 * 1024 ** 3;
 
 function byIdAsc(a: EvictionCandidate, b: EvictionCandidate): number {
   return a.id - b.id;
@@ -201,6 +212,7 @@ export function planEviction(
     strategy: "",
     alternativesSummary: [] as EvictionPlan["alternativesSummary"],
     usedProtected: false,
+    usedOversized: false,
     exclusions: [] as { id: number; reason: string }[],
   };
 
@@ -225,18 +237,35 @@ export function planEviction(
     return { ...base, status: "no_safe_candidates", exclusions, reason: "无可安全删除的候选" };
   }
 
-  // 保护期候选默认避开；覆盖不了缺口时降级动用（有界保护，不能无限阻塞）
-  let pool = valid.filter((c) => !c.protectedByAge);
-  let usedProtected = false;
-  if (totalReclaim(pool) < needBytes) {
-    pool = valid;
-    usedProtected = true;
+  // 分层候选池：默认避开保护期候选和超大候选，覆盖不了缺口时逐层放宽（有界保护，不能无限阻塞）。
+  // 保护期优先于体积：先放宽超大候选，仍不够才动用保护期内的新种。
+  const sizeLimit = needBytes + Math.max(needBytes, OVERSIZE_ALLOWANCE_BYTES);
+  const tiers = [
+    { usedProtected: false, usedOversized: false },
+    { usedProtected: false, usedOversized: true },
+    { usedProtected: true, usedOversized: false },
+    { usedProtected: true, usedOversized: true },
+  ];
+  let pool: EvictionCandidate[] = valid;
+  let tier = tiers[tiers.length - 1]!;
+  for (const t of tiers) {
+    const p = valid.filter(
+      (c) =>
+        (t.usedProtected || !c.protectedByAge) && (t.usedOversized || c.reclaimableBytes <= sizeLimit),
+    );
+    if (totalReclaim(p) >= needBytes) {
+      pool = p;
+      tier = t;
+      break;
+    }
   }
+  const { usedProtected, usedOversized } = tier;
   if (totalReclaim(pool) < needBytes) {
     return {
       ...base,
       status: "insufficient_reclaim",
       usedProtected,
+      usedOversized,
       exclusions,
       reason: `候选合计可释放 ${totalReclaim(pool)} < 缺口 ${needBytes}`,
     };
@@ -292,6 +321,7 @@ export function planEviction(
       };
     }),
     usedProtected,
+    usedOversized,
     exclusions,
   };
 }

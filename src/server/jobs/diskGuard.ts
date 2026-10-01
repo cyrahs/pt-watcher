@@ -250,6 +250,7 @@ async function persistPlan(
       expectedOvershoot: plan.expectedOvershoot,
       alternativesSummary: plan.alternativesSummary,
       usedProtected: plan.usedProtected,
+      usedOversized: plan.usedOversized,
       exclusions: plan.exclusions,
       reason: plan.reason ?? null,
       // 完整候选（含未选中的），供事后对照被保留种子的实际上传评估规划

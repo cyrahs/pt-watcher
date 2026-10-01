@@ -6,6 +6,7 @@ import { getAdapter } from "../pt/registry";
 import { logEvent } from "../services/events";
 import { blockDownload } from "../services/downloadControl";
 import { reclaimableBytes } from "./diskGuard";
+import { whereStillActive } from "./reconcile";
 
 /**
  * 阻断原因：区分站点确认的到期与复核失败时的保守停止（后者可能是误停，需要单独统计）。
@@ -108,7 +109,7 @@ export async function freeGuard(): Promise<void> {
     await db
       .update(schema.torrents)
       .set({ state: "stopped_free_expired" })
-      .where(eq(schema.torrents.id, row.id));
+      .where(whereStillActive(row.id));
     await logEvent(
       "free_expired_stopped",
       `${STOP_REASON_TEXT[stopReason]}，已阻断下载（已有 ${(row.progress * 100).toFixed(1)}% 数据继续上传）: ${row.name}`,

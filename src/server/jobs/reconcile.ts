@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db";
 import { qbit, type QbitTorrentInfo } from "../qbit/client";
 import { getSettings } from "../config";
@@ -10,6 +10,15 @@ import { addDailyTraffic, counterDelta } from "../services/traffic";
 
 /** 仍受管、会被自动操作的状态 */
 export const ACTIVE_STATES = ["downloading", "completed", "stopped_free_expired"] as const;
+
+/**
+ * 只更新仍处于活跃状态的行。各 job 先读后写、之间有 await，并发的 diskGuard / freeGuard
+ * 可能已把同一行改成终态（如 deleted_by_cleanup）；无条件按 id 写回会把终态覆盖成
+ * completed，让已删除的种子重新进入清理候选、被重复删除。
+ */
+export function whereStillActive(id: number) {
+  return and(eq(schema.torrents.id, id), inArray(schema.torrents.state, [...ACTIVE_STATES]));
+}
 
 function stateFromQbit(q: QbitTorrentInfo, prevState?: string): string {
   // 下载被阻断的状态粘滞：file_prio 阻断会让 qBit 报告 progress=1（相对已选文件），
@@ -59,20 +68,24 @@ export async function reconcile(): Promise<void> {
   for (const row of rows) {
     const q = byHash.get(row.infoHash);
     if (!q) {
-      await db
+      const updated = await db
         .update(schema.torrents)
         .set({ state: "removed_external", deletedAt: now })
-        .where(eq(schema.torrents.id, row.id));
+        .where(whereStillActive(row.id))
+        .returning({ id: schema.torrents.id });
+      if (!updated.length) continue;
       await logEvent("removed_external", `种子已在 qBittorrent 中被外部删除: ${row.name}`, {
         torrentRef: row.infoHash,
       });
       continue;
     }
     if (!managed.has(q.category)) {
-      await db
+      const updated = await db
         .update(schema.torrents)
         .set({ state: "untracked", category: q.category, untrackedAt: now })
-        .where(eq(schema.torrents.id, row.id));
+        .where(whereStillActive(row.id))
+        .returning({ id: schema.torrents.id });
+      if (!updated.length) continue;
       await logEvent("untracked", `种子移出受管分类，已脱管: ${row.name} → [${q.category}]`, {
         torrentRef: row.infoHash,
       });
@@ -158,7 +171,7 @@ export async function reconcile(): Promise<void> {
         predictedAt: now,
         statSampledAt: now,
       })
-      .where(eq(schema.torrents.id, row.id));
+      .where(whereStillActive(row.id));
   }
 
   await addDailyTraffic(sumDeltaUp, sumDeltaDown);

@@ -63,6 +63,8 @@ export interface EvictionPlanRow {
     expectedTotalReclaim: number;
     expectedOvershoot: number;
     usedProtected: boolean;
+    /** 旧计划没有这个字段 */
+    usedOversized?: boolean;
     reason: string | null;
   };
 }
