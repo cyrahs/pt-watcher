@@ -58,8 +58,8 @@ class Parser {
   }
 }
 
-/** 从 .torrent 字节计算 v1 infohash（40 位小写 hex） */
-export async function infoHashFromTorrent(data: Uint8Array): Promise<string> {
+/** 定位顶层 info dict 的原始字节区间 */
+function findInfoSpan(data: Uint8Array): { start: number; end: number } {
   if (data[0] !== 0x64) throw new Error("not a torrent file (no top-level dict)");
   const p = new Parser(data);
   p.pos = 1;
@@ -71,7 +71,40 @@ export async function infoHashFromTorrent(data: Uint8Array): Promise<string> {
     if (key === "info") infoSpan = { start, end: p.pos };
   }
   if (!infoSpan) throw new Error("torrent file has no info dict");
+  return infoSpan;
+}
+
+/** 从 .torrent 字节计算 v1 infohash（40 位小写 hex） */
+export async function infoHashFromTorrent(data: Uint8Array): Promise<string> {
+  const infoSpan = findInfoSpan(data);
   const infoBytes = data.subarray(infoSpan.start, infoSpan.end);
   const digest = await crypto.subtle.digest("SHA-1", infoBytes as unknown as BufferSource);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * 种子内容的根名称（info.name，有 name.utf-8 时优先）：多文件种子是根目录名，单文件种子是文件名。
+ * qBittorrent 默认布局下内容落在 保存路径/根名称。
+ */
+export function torrentContentName(data: Uint8Array): string {
+  const span = findInfoSpan(data);
+  const p = new Parser(data);
+  p.pos = span.start;
+  if (p.byte() !== 0x64) throw new Error("bencode: info is not a dict");
+  p.pos++;
+  let name: string | null = null;
+  let nameUtf8: string | null = null;
+  while (p.byte() !== 0x65) {
+    const key = new TextDecoder().decode(p.parseString());
+    if ((key === "name" || key === "name.utf-8") && p.byte() >= 0x30 && p.byte() <= 0x39) {
+      const value = new TextDecoder().decode(p.parseString());
+      if (key === "name") name = value;
+      else nameUtf8 = value;
+    } else {
+      p.skipValue();
+    }
+  }
+  const result = nameUtf8 ?? name;
+  if (!result) throw new Error("torrent info dict has no name");
+  return result;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { passesFilters, rankCandidates } from "./discover";
+import { contentRootIndex, passesFilters, rankCandidates } from "./discover";
 import type { FreeTorrent } from "../pt/types";
 
 const GB = 1024 ** 3;
@@ -73,5 +73,21 @@ describe("rankCandidates", () => {
     const unlimited = torrent({ torrentId: "unl", leechers: 0, seeders: 0, freeEndTime: null });
     const limited = torrent({ torrentId: "lim", leechers: 0, seeders: 0, freeEndTime: new Date(NOW + 48 * 3600_000) });
     expect(rankCandidates([unlimited, limited]).map((t) => t.torrentId)).toEqual(["lim", "unl"]);
+  });
+});
+
+describe("contentRootIndex", () => {
+  test("按 content_path 最后一段建索引：9/27 的同内容种子会撞上 9/24 那个", () => {
+    const index = contentRootIndex([
+      { name: "Bitchinbubba", content_path: "/media/torrent/pt-watcher/Bitchinbubba" },
+      { name: "single", content_path: "/media/torrent/pt-watcher/movie.mkv/" },
+    ]);
+    expect(index.get("Bitchinbubba")).toBe("Bitchinbubba");
+    expect(index.get("movie.mkv")).toBe("single");
+    expect(index.has("Other")).toBe(false);
+  });
+
+  test("缺 content_path 时退回种子名", () => {
+    expect(contentRootIndex([{ name: "Foo" }]).get("Foo")).toBe("Foo");
   });
 });
