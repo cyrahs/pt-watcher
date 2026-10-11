@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { contentRootIndex, passesFilters, rankCandidates } from "./discover";
+import { contentRootIndex, passesFilters, rankCandidates, selectForAdmission } from "./discover";
 import type { FreeTorrent } from "../pt/types";
 
 const GB = 1024 ** 3;
@@ -89,5 +89,44 @@ describe("contentRootIndex", () => {
 
   test("缺 content_path 时退回种子名", () => {
     expect(contentRootIndex([{ name: "Foo" }]).get("Foo")).toBe("Foo");
+  });
+});
+
+describe("selectForAdmission", () => {
+  const ids = (xs: { t: FreeTorrent }[]) => xs.map((x) => x.t.torrentId);
+
+  test("预算够时按名次加入，不超过每轮上限", () => {
+    const list = ["a", "b", "c"].map((id) => torrent({ torrentId: id, sizeBytes: 10 * GB }));
+    const r = selectForAdmission(list, 100 * GB, 2);
+    expect(ids(r.batch)).toEqual(["a", "b"]);
+    expect(ids(r.rankedOut)).toEqual(["c"]);
+    expect(r.deferred).toEqual([]);
+  });
+
+  test("放不下的大包推迟，后面体积更小的仍可入场", () => {
+    const list = [
+      torrent({ torrentId: "big", sizeBytes: 640 * GB }),
+      torrent({ torrentId: "s1", sizeBytes: 5 * GB }),
+      torrent({ torrentId: "s2", sizeBytes: 5 * GB }),
+    ];
+    const r = selectForAdmission(list, 12 * GB, 10);
+    expect(ids(r.deferred)).toEqual(["big"]);
+    expect(ids(r.batch)).toEqual(["s1", "s2"]);
+    expect(r.batch.map((x) => x.rank)).toEqual([2, 3]);
+  });
+
+  test("预算按已选体积递减：累计超出的推迟", () => {
+    const list = ["a", "b", "c"].map((id) => torrent({ torrentId: id, sizeBytes: 10 * GB }));
+    const r = selectForAdmission(list, 25 * GB, 10);
+    expect(ids(r.batch)).toEqual(["a", "b"]);
+    expect(ids(r.deferred)).toEqual(["c"]);
+  });
+
+  test("预算 ≤ 0：全部推迟，推迟的不占名额", () => {
+    const list = ["a", "b", "c"].map((id) => torrent({ torrentId: id }));
+    const r = selectForAdmission(list, -5 * GB, 1);
+    expect(r.batch).toEqual([]);
+    expect(ids(r.deferred)).toEqual(["a", "b", "c"]);
+    expect(r.rankedOut).toEqual([]);
   });
 });

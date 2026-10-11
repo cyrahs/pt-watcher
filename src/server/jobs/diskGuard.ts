@@ -9,11 +9,13 @@ import { planEviction, type EvictionCandidate, type EvictionPlan } from "./evict
 import { ACTIVE_STATES } from "./reconcile";
 import {
   additionAllowed,
+  admissionBudget,
   counterReset,
   rebaseAfterCounterReset,
   rebaseSettled,
   resolveObservedState,
   settleLedger,
+  type AdmissionBudget,
   type DiskObservation,
   type LedgerSettlement,
   type PressureState,
@@ -99,6 +101,36 @@ export function getDiskGuardState(): {
  */
 export function isAdditionAllowed(): boolean {
   return additionAllowed(guard.state);
+}
+
+/**
+ * 本轮还能接纳多少新种体积（见 diskGuardPolicy.admissionBudget）。
+ * 观测未知时返回 null；调用方应先用 isAdditionAllowed 门控。
+ */
+export async function getAdmissionBudget(now = Date.now()): Promise<AdmissionBudget | null> {
+  if (guard.freeBytes === null) return null;
+  const s = getSettings();
+  const managed = new Set(s.managedCategories);
+  const rows = await db
+    .select()
+    .from(schema.torrents)
+    .where(inArray(schema.torrents.state, [...ACTIVE_STATES]));
+  return admissionBudget({
+    freeBytes: guard.freeBytes,
+    pendingReleaseBytes: guard.settlement?.unreflectedBytes ?? 0,
+    thresholdBytes: s.freeSpaceThresholdGB * GB,
+    rows: rows
+      .filter((r) => managed.has(r.category))
+      .map((r) => ({
+        sizeBytes: r.sizeBytes,
+        progress: r.progress,
+        state: r.state,
+        addedAtMs: r.addedAt.getTime(),
+        downloadBlocked: (r.downloadBlock?.reasons.length ?? 0) > 0,
+      })),
+    now,
+    protectMs: s.newTorrentProtectHours * 3600 * 1000,
+  });
 }
 
 /** 观测实际剩余空间与会话累计下载；失败/缺失 → null（未知 ≠ 0） */

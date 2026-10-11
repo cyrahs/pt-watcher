@@ -14,7 +14,7 @@ import {
   type CandidateObservation,
 } from "../services/discoverLog";
 import { unblockDownload } from "../services/downloadControl";
-import { ensureFreshObservation, isAdditionAllowed, getDiskGuardState } from "./diskGuard";
+import { ensureFreshObservation, isAdditionAllowed, getDiskGuardState, getAdmissionBudget } from "./diskGuard";
 import { ACTIVE_STATES, whereStillActive } from "./reconcile";
 
 const GB = 1024 ** 3;
@@ -101,6 +101,38 @@ export function rankCandidates(list: FreeTorrent[]): FreeTorrent[] {
   });
 }
 
+export interface AdmissionSelection {
+  /** 本轮尝试添加（rank = 在排序后候选中的名次） */
+  batch: { t: FreeTorrent; rank: number }[];
+  /** 放不下：留到空间腾出来再加（不标记 seen） */
+  deferred: { t: FreeTorrent; rank: number }[];
+  /** 超出每轮添加上限 */
+  rankedOut: { t: FreeTorrent; rank: number }[];
+}
+
+/**
+ * 按名次贪心入场：放得下（体积 ≤ 剩余预算）的才加，放不下的推迟，后面体积更小的仍可入场。
+ * 推迟的不占每轮添加名额；大包会在保护期过后、预算回升时重新轮到。
+ */
+export function selectForAdmission(
+  ranked: FreeTorrent[],
+  budgetBytes: number,
+  maxAdd: number,
+): AdmissionSelection {
+  const out: AdmissionSelection = { batch: [], deferred: [], rankedOut: [] };
+  let remaining = budgetBytes;
+  ranked.forEach((t, i) => {
+    const item = { t, rank: i + 1 };
+    if (out.batch.length >= maxAdd) out.rankedOut.push(item);
+    else if (t.sizeBytes > remaining) out.deferred.push(item);
+    else {
+      out.batch.push(item);
+      remaining -= t.sizeBytes;
+    }
+  });
+  return out;
+}
+
 /**
  * qBittorrent 中已被占用的内容根名称 → 占用它的种子名。
  * 取 content_path 的最后一段（缺字段时退回种子名）；不区分分类和保存路径，宁可多拦。
@@ -154,8 +186,9 @@ async function resumeReFreed(allFound: FreeTorrent[], now: number): Promise<void
 
 /**
  * 发现 free 种子并添加到 qBittorrent。
- * 不做空间预留、不按候选体积提前清理、不比较完整体积与空闲空间（交接文稿 §5.4）；
- * 磁盘压力/未知时整体暂缓新增下载增长（反压），实际空间变化由 diskGuard 高频监控处理。
+ * 不做空间预留、不按候选体积提前清理（交接文稿 §5.4）；磁盘压力/未知时整体暂缓新增下载增长（反压），
+ * 实际空间变化由 diskGuard 高频监控处理。
+ * 入场时按容量预算筛选：只加清理不必删保护期新种就放得下的候选（见 diskGuardPolicy.admissionBudget）。
  */
 export async function discover(): Promise<void> {
   const s = getSettings();
@@ -246,17 +279,45 @@ async function evaluate(
   }
   if (ranked.length === 0) return;
 
-  const batch = ranked.slice(0, s.maxAddPerRun);
-  ranked
-    .slice(s.maxAddPerRun)
-    .forEach((t, i) => note(t, "ranked_out", { rank: s.maxAddPerRun + i + 1 }));
+  const budget = await getAdmissionBudget(now);
+  const { batch, deferred, rankedOut } = selectForAdmission(
+    ranked,
+    budget?.budgetBytes ?? 0,
+    s.maxAddPerRun,
+  );
+  rankedOut.forEach(({ t, rank }) => note(t, "ranked_out", { rank }));
+  if (deferred.length > 0) {
+    const budgetGB = ((budget?.budgetBytes ?? 0) / GB).toFixed(1);
+    deferred.forEach(({ t, rank }) =>
+      note(t, "deferred", { reason: `capacity: ${(t.sizeBytes / GB).toFixed(1)}GB > 预算 ${budgetGB}GB`, rank }),
+    );
+    const deferredBytes = deferred.reduce((sum, { t }) => sum + t.sizeBytes, 0);
+    await logEvent(
+      "discover_deferred",
+      `容量不足：${deferred.length} 个候选（共 ${(deferredBytes / GB).toFixed(1)}GB）放不下，等空间腾出再加；` +
+        `可用预算 ${budgetGB}GB（剩余高出阈值 ${((budget?.headroomBytes ?? 0) / GB).toFixed(1)}GB，` +
+        `下载中待写入 ${((budget?.pendingWriteBytes ?? 0) / GB).toFixed(1)}GB，` +
+        `保护期外可释放 ${((budget?.unprotectedReclaimBytes ?? 0) / GB).toFixed(1)}GB）`,
+      {
+        payload: {
+          reason: "capacity",
+          budgetBytes: budget?.budgetBytes ?? null,
+          headroomBytes: budget?.headroomBytes ?? null,
+          pendingWriteBytes: budget?.pendingWriteBytes ?? null,
+          unprotectedReclaimBytes: budget?.unprotectedReclaimBytes ?? null,
+          deferredCandidates: deferred.length,
+          deferredBytes,
+          addedThisRound: batch.length,
+        },
+      },
+    );
+  }
 
   // 内容根名称占用表：不同站点种子可能是同一份内容，落到同一目录会共用文件，
   // 删除其中一个（连同文件）会把另一个变成没有数据的空壳
   let contentRoots: Map<string, string> | null = null;
 
-  for (const [i, t] of batch.entries()) {
-    const rank = i + 1;
+  for (const { t, rank } of batch) {
     try {
       const adapter = getAdapters().find((a) => a.siteId === t.siteId)!;
       const file = await adapter.fetchTorrentFile(t.torrentId);

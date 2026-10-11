@@ -83,3 +83,12 @@ legacy `ageHalfLifeDays` 未改公式（真实半衰期 = 14·ln2 ≈ 9.7 天）
 - **无数据僵尸。** free 到期阻断时进度为 0 的种子（一个月 7 次阻断中 5 次；通常是入场时只有 1 个做种且很快消失）没有任何数据，可释放字节为 0，规划器按 `zero_reclaim` 永久排除，qBittorrent 里已积累 6 个（126～669 小时）。新增 `freeExpiredNoDataPurgeHours`（默认 24）：free 截止后超过 N 小时仍无数据即删除，记 `free_expired_purged` 事件；删除后为终态，再次 free 由 discover 按新周期正常重新入场（`seen` 只对同周期防抖）。有数据的阻断种子仍交给清理规划按价值处理。
 - **上行带宽是硬顶。** 小时采样上传速度 p50 3.5 MB/s、p90 4.5、最高 4.8，29% 的采样 ≥ 4.0；部署所在网络上行 35 Mbps（≈ 4.4 MB/s），高峰时段已饱和，UTC 12–16 时低谷 1.4～1.9 MB/s。饱和时段删哪个种子都不影响总上传，上述模型改进只在非饱和时段起作用；更换网络后应重新评估。入场侧不是瓶颈：3 天内站点给出的限时 free 全部入场（无 ranked_out / deferred）。
 - **部署注意。** `saveSettings` 落库的是完整合并对象，已保存过配置的实例不会跟随代码默认值变化：升级后需在设置页或 `PUT /api/settings` 显式改 `uploadEmaHalfLifeSec` / `newTorrentProtectHours`；`freeExpiredNoDataPurgeHours` 是新键，旧 JSON 缺失时取默认值生效。
+
+## 8. 入场容量检查（2026-10-11）
+
+- **现象。** 10/8 08:15 ～ 10/10 06:00 一波 free 在 46 小时内加了 360 个种、2956 GB，受管配额只有 1.6 TB。10/9 02:37 ～ 08:16 磁盘上的候选全部在 24h 保护期内（例如 03:21 那次计划，219 个候选、保护期外可释放 0），清理只能降级删保护期新种：47 个，体积合计 790 GB，已下载 76 GB，只上传 3 GB。IPX FHD Pack 301-400（688 GB，2 做种 / 76 下载）02:50 加入，31 分钟后下了 1.3 GB 就被删。
+- **原因。** discover 不比较体积与空间（原 §5.4 的取舍），波次总量超过配额后，刚加入的种还没有上传记录，在保护期候选里损失最低，于是加了就删。
+- **改动。** discover 入场前按容量预算贪心筛选（`diskGuardPolicy.admissionBudget`、`discover.selectForAdmission`）：
+  预算 = (实测剩余 + 待到账释放 − 阈值) − 进行中下载的剩余写入 + 保护期外种子可释放量。
+  体积 ≤ 剩余预算的候选按名次入场并扣减预算；放不下的记为 `deferred`（原因 `capacity: …`），不标记 seen，下一轮重新评估，后面体积更小的仍可入场；推迟的不占 `maxAddPerRun` 名额。有推迟时每轮记一条 `discover_deferred` 事件（payload.reason = "capacity"，含预算各项）。
+- **仍不做的。** 不预留空间、不按候选体积提前清理；实际腾空间仍由 diskGuard 按缺口执行。
