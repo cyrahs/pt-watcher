@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   additionAllowed,
+  admissionBudget,
+  type AdmissionRow,
   counterReset,
   rebaseAfterCounterReset,
   releaseTolerance,
@@ -174,5 +176,55 @@ describe("releaseTolerance", () => {
     expect(releaseTolerance(0, 0)).toBe(1 * GB);
     expect(releaseTolerance(10 * GB, 0)).toBe(2 * GB);
     expect(releaseTolerance(10 * GB, 0.5 * GB)).toBe(2.5 * GB);
+  });
+});
+
+describe("admissionBudget", () => {
+  const NOW = Date.parse("2026-10-09T03:00:00Z");
+  const H = 3600_000;
+  const PROTECT = 24 * H;
+  const row = (p: Partial<AdmissionRow>): AdmissionRow => ({
+    sizeBytes: 10 * GB,
+    progress: 1,
+    state: "completed",
+    addedAtMs: NOW - 48 * H,
+    downloadBlocked: false,
+    ...p,
+  });
+  const budget = (rows: AdmissionRow[], freeBytes = 60 * GB, pendingReleaseBytes = 0) =>
+    admissionBudget({ freeBytes, pendingReleaseBytes, thresholdBytes: 50 * GB, rows, now: NOW, protectMs: PROTECT });
+
+  test("保护期外已完成的种子全部计入可释放", () => {
+    const b = budget([row({}), row({ sizeBytes: 30 * GB })]);
+    expect(b.headroomBytes).toBe(10 * GB);
+    expect(b.unprotectedReclaimBytes).toBe(40 * GB);
+    expect(b.budgetBytes).toBe(50 * GB);
+  });
+
+  test("磁盘被保护期新种占满时预算为负（10/9 的情形：只能删新种腾空间）", () => {
+    const rows = [
+      row({ addedAtMs: NOW - 2 * H }),
+      row({ addedAtMs: NOW - 5 * H, state: "downloading", progress: 0.5 }),
+    ];
+    const b = budget(rows, 53 * GB);
+    expect(b.unprotectedReclaimBytes).toBe(0);
+    expect(b.pendingWriteBytes).toBe(5 * GB);
+    expect(b.budgetBytes).toBe(3 * GB - 5 * GB);
+  });
+
+  test("进行中下载的剩余写入扣掉；被阻断的下载不再写入", () => {
+    const rows = [
+      row({ state: "downloading", progress: 0.2, addedAtMs: NOW - H }),
+      row({ state: "downloading", progress: 0.2, addedAtMs: NOW - H, downloadBlocked: true }),
+      row({ state: "stopped_free_expired", progress: 0.4, addedAtMs: NOW - 30 * H }),
+    ];
+    const b = budget(rows);
+    expect(b.pendingWriteBytes).toBe(8 * GB);
+    expect(b.unprotectedReclaimBytes).toBe(4 * GB);
+    expect(b.budgetBytes).toBe(10 * GB - 8 * GB + 4 * GB);
+  });
+
+  test("待到账释放计入有效剩余", () => {
+    expect(budget([], 45 * GB, 10 * GB).budgetBytes).toBe(5 * GB);
   });
 });

@@ -95,6 +95,63 @@ export function additionAllowed(state: PressureState): boolean {
   return state === "HEALTHY" || state === "RECLAIMING";
 }
 
+/** 入场容量估算用到的受管种子字段 */
+export interface AdmissionRow {
+  sizeBytes: number;
+  progress: number;
+  state: string;
+  addedAtMs: number;
+  /** 下载被阻断（free 到期等）：不会再写入 */
+  downloadBlocked: boolean;
+}
+
+export interface AdmissionBudget {
+  /** 还能接纳的新种体积；≤ 0 表示本轮一个也放不下 */
+  budgetBytes: number;
+  /** 有效剩余（实测 + 待到账释放）高出阈值的部分，可为负 */
+  headroomBytes: number;
+  /** 进行中的下载还要写入的量 */
+  pendingWriteBytes: number;
+  /** 保护期外种子可释放的量（清理不必动用保护期新种就能腾出的空间） */
+  unprotectedReclaimBytes: number;
+}
+
+/**
+ * 入场容量：只有清理不必删保护期内新种就能腾出的空间，才算新种放得下。
+ *   预算 = (有效剩余 − 阈值) − 进行中下载的剩余写入 + 保护期外种子可释放量
+ * 不算这一步时，free 波的总量超过配额后，刚加入的种还没有上传记录、在保护期候选里损失最低，
+ * 会被清理当成最便宜的空间立刻删掉（加了就删，白下数据）。
+ * 可释放量按进度折算，与 diskGuard.reclaimableBytes 一致。
+ */
+export function admissionBudget(input: {
+  /** 实测剩余 */
+  freeBytes: number;
+  pendingReleaseBytes: number;
+  thresholdBytes: number;
+  rows: AdmissionRow[];
+  now: number;
+  protectMs: number;
+}): AdmissionBudget {
+  const headroomBytes = input.freeBytes + input.pendingReleaseBytes - input.thresholdBytes;
+  let pendingWriteBytes = 0;
+  let unprotectedReclaimBytes = 0;
+  for (const r of input.rows) {
+    const progress = r.state === "completed" ? 1 : Math.min(Math.max(r.progress, 0), 1);
+    if (r.state === "downloading" && !r.downloadBlocked) {
+      pendingWriteBytes += r.sizeBytes * (1 - progress);
+    }
+    if (input.now - r.addedAtMs > input.protectMs) {
+      unprotectedReclaimBytes += r.sizeBytes * progress;
+    }
+  }
+  return {
+    budgetBytes: Math.round(headroomBytes - pendingWriteBytes + unprotectedReclaimBytes),
+    headroomBytes,
+    pendingWriteBytes: Math.round(pendingWriteBytes),
+    unprotectedReclaimBytes: Math.round(unprotectedReclaimBytes),
+  };
+}
+
 /** 到账容差：预计释放本身是按进度折算的低置信估计，再加上 qBittorrent 空间数字的刷新滞后 */
 export function releaseTolerance(dueBytes: number, recentWriteBytes: number): number {
   return Math.max(1 * GB, 0.2 * dueBytes) + Math.max(0, recentWriteBytes);
