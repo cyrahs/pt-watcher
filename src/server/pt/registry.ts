@@ -15,6 +15,11 @@ export function getAdapters(): PtAdapter[] {
         baseUrl: s.mtBaseUrl,
         modes: s.searchModes,
         categories: s.searchCategories,
+        vip: {
+          mode: s.vipMode,
+          manualUntil: s.vipManualUntil ? new Date(s.vipManualUntil) : null,
+          minLeechers: s.vipMinLeechers,
+        },
       }),
     );
   }

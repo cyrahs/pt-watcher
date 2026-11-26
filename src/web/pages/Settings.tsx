@@ -98,6 +98,15 @@ const GROUPS: { title: string; fields: FieldDef[]; test?: "mteam" | "qbit" }[] =
     ],
   },
   {
+    title: "VIP 期（下载不计量时追求上传最大化）",
+    fields: [
+      { key: "vipMode", label: "模式：auto = 从 M-Team 账号资料检测；manual = 按下方截止时间；off = 只下 free", type: "text" },
+      { key: "vipManualUntil", label: "manual 模式的 VIP 截止时间（ISO 8601，如 2026-12-26T04:49:24Z）", type: "text" },
+      { key: "vipMinLeechers", label: "非 free 种子入选的最少下载者数", type: "number" },
+      { key: "vipDownloadToleranceGB", label: "熔断：VIP 期内站点下载量增长超过多少 GB 即自动关闭 VIP 模式", type: "number" },
+    ],
+  },
+  {
     title: "qBittorrent 连接",
     test: "qbit",
     fields: [
