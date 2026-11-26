@@ -7,6 +7,7 @@ import { logEvent } from "../services/events";
 import { blockDownload } from "../services/downloadControl";
 import { reclaimableBytes } from "./diskGuard";
 import { whereStillActive } from "./reconcile";
+import { vipGuard } from "../services/vipGuard";
 
 /**
  * 阻断原因：区分站点确认的到期与复核失败时的保守停止（后者可能是误停，需要单独统计）。
@@ -32,6 +33,12 @@ const STOP_REASON_TEXT: Record<StopReason, string> = {
  */
 export async function freeGuard(): Promise<void> {
   if (!qbit.configured) return;
+  // VIP 窗口变化（结束 / 熔断）会把借窗口下载的种子提前到本轮复核
+  try {
+    await vipGuard();
+  } catch (e) {
+    await logEvent("free_guard_error", `VIP 窗口检查失败: ${String(e)}`);
+  }
   const s = getSettings();
   const deadline = new Date(Date.now() + s.freeStopLeadMinutes * 60 * 1000);
 

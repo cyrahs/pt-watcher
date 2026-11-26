@@ -423,9 +423,11 @@ async function evaluate(
       note(t, "added", { rank, infoHash });
       await logEvent(
         "added",
-        `添加 free 种子: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, free 至 ${
-          t.freeEndTime ? t.freeEndTime.toISOString() : "不限"
-        })`,
+        t.vipOnly
+          ? `添加种子（VIP 期，非 free）: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, 可下载至 ${t.freeEndTime?.toISOString()})`
+          : `添加 free 种子: ${t.name} (${(t.sizeBytes / GB).toFixed(1)}GB, free 至 ${
+              t.freeEndTime ? t.freeEndTime.toISOString() : "不限"
+            })`,
         {
           torrentRef: infoHash,
           payload: {
@@ -437,6 +439,7 @@ async function evaluate(
             seeders: t.seeders,
             leechers: t.leechers,
             snatched: t.snatched,
+            vipOnly: t.vipOnly ?? false,
             rank,
           },
         },

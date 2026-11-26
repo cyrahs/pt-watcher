@@ -35,6 +35,16 @@ export const settingsSchema = z.object({
   qbitUrl: z.string().default(process.env.QBIT_URL ?? ""),
   qbitApiKey: z.string().default(process.env.QBIT_API_KEY ?? ""),
 
+  // VIP（账号下载不计量）期：非 free 种子也作为候选，目标从"只下 free"变为上传最大化
+  /** auto：从 M-Team 账号资料检测（vip + 不计下载权限）；manual：按 vipManualUntil；off：只下 free */
+  vipMode: z.enum(["auto", "manual", "off"]).default("auto"),
+  /** manual 模式的 VIP 截止时间（ISO 8601，如 2026-12-26T04:49:24Z） */
+  vipManualUntil: z.string().default(""),
+  /** VIP 期非 free 种子入选的最少下载者数 */
+  vipMinLeechers: z.number().int().nonnegative().default(5),
+  /** 熔断：VIP 期内站点下载量比基线多出超过这么多（GB）即判定"实际在计下载"，自动关闭 VIP 模式 */
+  vipDownloadToleranceGB: z.number().positive().default(2),
+
   // 受管分类
   managedCategories: z.array(z.string()).default(["pt-watcher"]),
   incomingCategory: z.string().default("pt-watcher"),

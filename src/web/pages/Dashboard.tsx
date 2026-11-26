@@ -178,7 +178,11 @@ export function Dashboard() {
                   </span>
                 </span>
               </div>
-              <div className="sub" />
+              <div className="sub">
+                {mt.vipUntil
+                  ? `VIP 期至 ${new Date(mt.vipUntil).toLocaleString()}：下载不计量，非 free 种子也会下载`
+                  : "只下载 free 种子"}
+              </div>
             </>
           ) : (
             <>

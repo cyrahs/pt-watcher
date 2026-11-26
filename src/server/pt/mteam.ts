@@ -8,7 +8,20 @@ export interface MTeamOptions {
   /** 只搜索这些分类 id（叶子分类），mode 按分类归属自动推导 */
   categories?: string[];
   pageSize?: number;
+  /** VIP（下载不计量）窗口：期间非 free 种子也作为候选 */
+  vip?: VipOptions;
 }
+
+export interface VipOptions {
+  /** auto：从账号资料读取；manual：用 manualUntil；off：不使用 */
+  mode: "auto" | "manual" | "off";
+  manualUntil?: Date | null;
+  /** 非 free 种子入选的最少下载者数（需求太低的不值得占盘） */
+  minLeechers?: number;
+}
+
+/** M-Team 账号资料里表示 tracker 不统计下载量的权限 */
+export const NO_DOWNLOAD_AUTHORITY = "USER_TRACKER_NO_DOWNLOAD";
 
 interface MtCategoryEntry {
   id: string | number;
@@ -47,8 +60,10 @@ interface MtTorrent {
 
 const FREE_DISCOUNTS = new Set(["FREE", "_2X_FREE"]);
 
-interface MtMemberProfile {
+export interface MtMemberProfile {
   username?: string;
+  authorities?: string[];
+  memberStatus?: { vip?: boolean; vipUntil?: string | null } | null;
   memberCount?: {
     uploaded?: string | number;
     downloaded?: string | number;
@@ -86,6 +101,31 @@ export function effectiveFreeEnd(status: MtStatus | undefined): Date | null | un
   return undefined;
 }
 
+/**
+ * 自动模式的 VIP 窗口：资料里 vip=true、vipUntil 在未来，且账号有"tracker 不统计下载量"权限
+ * 三者同时成立才算（权限名变了就保守地不启用，宁可只下 free）。
+ */
+export function vipWindowFromProfile(p: MtMemberProfile | null | undefined, now = Date.now()): Date | null {
+  if (!p?.memberStatus?.vip) return null;
+  if (!p.authorities?.includes(NO_DOWNLOAD_AUTHORITY)) return null;
+  const until = parseMtTime(p.memberStatus.vipUntil);
+  return until && until.getTime() > now ? until : null;
+}
+
+/**
+ * 叠加 VIP 窗口后的有效免费截止：站点 free 截止与 VIP 截止取较晚者；不限时 free 仍为 null；
+ * 非 free 在窗口内以 VIP 截止为准（vipOnly）。返回 undefined 表示不可下载。
+ */
+export function withVipWindow(
+  siteFreeEnd: Date | null | undefined,
+  vipUntil: Date | null,
+): { end: Date | null | undefined; vipOnly: boolean } {
+  if (siteFreeEnd === null) return { end: null, vipOnly: false };
+  if (!vipUntil) return { end: siteFreeEnd, vipOnly: false };
+  if (siteFreeEnd === undefined) return { end: vipUntil, vipOnly: true };
+  return { end: siteFreeEnd.getTime() >= vipUntil.getTime() ? siteFreeEnd : vipUntil, vipOnly: false };
+}
+
 export class MTeamAdapter implements PtAdapter {
   readonly siteId = "mteam";
   private baseUrl: string;
@@ -95,7 +135,8 @@ export class MTeamAdapter implements PtAdapter {
   private pageSize: number;
   private lastRequestAt = 0;
   private categoryCache: { at: number; list: PtCategory[] } | null = null;
-  private userStatsCache: { at: number; stats: SiteUserStats } | null = null;
+  private profileCache: { at: number; data: MtMemberProfile | null } | null = null;
+  private vip: VipOptions;
 
   constructor(opts: MTeamOptions) {
     this.apiKey = opts.apiKey;
@@ -103,6 +144,7 @@ export class MTeamAdapter implements PtAdapter {
     this.modes = opts.modes?.length ? opts.modes : ["normal"];
     this.categories = opts.categories ?? [];
     this.pageSize = opts.pageSize ?? 100;
+    this.vip = opts.vip ?? { mode: "off" };
   }
 
   private authHeaders(): Record<string, string> {
@@ -138,10 +180,11 @@ export class MTeamAdapter implements PtAdapter {
     throw new Error(`mteam ${path} failed: ${String(lastError)}`);
   }
 
-  private toFreeTorrent(t: MtTorrent): FreeTorrent | null {
-    const freeEnd = effectiveFreeEnd(t.status);
+  private toFreeTorrent(t: MtTorrent, vipUntil: Date | null = null): FreeTorrent | null {
+    const { end: freeEnd, vipOnly } = withVipWindow(effectiveFreeEnd(t.status), vipUntil);
     if (freeEnd === undefined) return null;
     return {
+      ...(vipOnly ? { vipOnly: true } : {}),
       siteId: this.siteId,
       torrentId: String(t.id),
       name: t.name ?? `mteam-${t.id}`,
@@ -199,11 +242,31 @@ export class MTeamAdapter implements PtAdapter {
   }
 
   /** 账号总量统计；带 5 分钟缓存，避免 Dashboard 高频轮询打爆站点 API */
-  async getUserStats(): Promise<SiteUserStats | null> {
-    if (this.userStatsCache && Date.now() - this.userStatsCache.at < 300_000) {
-      return this.userStatsCache.stats;
-    }
+  /** 账号资料（5 分钟缓存），供统计与 VIP 窗口共用 */
+  private async profile(): Promise<MtMemberProfile | null> {
+    if (this.profileCache && Date.now() - this.profileCache.at < 300_000) return this.profileCache.data;
     const data = await this.request<MtMemberProfile>("/member/profile", { method: "POST" });
+    this.profileCache = { at: Date.now(), data: data ?? null };
+    return this.profileCache.data;
+  }
+
+  /** VIP（下载不计量）窗口截止；资料拉取失败时按不在窗口内处理（只下 free） */
+  async accountFreeUntil(): Promise<Date | null> {
+    const now = Date.now();
+    if (this.vip.mode === "off") return null;
+    if (this.vip.mode === "manual") {
+      const until = this.vip.manualUntil;
+      return until && until.getTime() > now ? until : null;
+    }
+    try {
+      return vipWindowFromProfile(await this.profile(), now);
+    } catch {
+      return null;
+    }
+  }
+
+  async getUserStats(): Promise<SiteUserStats | null> {
+    const data = await this.profile();
     const mc = data?.memberCount;
     if (!mc) return null;
     const uploadedBytes = Number(mc.uploaded ?? 0);
@@ -221,8 +284,8 @@ export class MTeamAdapter implements PtAdapter {
       downloadedBytes,
       shareRate: shareRate != null && Number.isFinite(shareRate) ? shareRate : null,
       bonus: mc.bonus != null ? Number(mc.bonus) : null,
+      vipUntil: (await this.accountFreeUntil())?.toISOString() ?? null,
     };
-    this.userStatsCache = { at: Date.now(), stats };
     return stats;
   }
 
@@ -244,6 +307,15 @@ export class MTeamAdapter implements PtAdapter {
 
   async searchFree(): Promise<FreeTorrent[]> {
     const results = new Map<string, FreeTorrent>();
+    const vipUntil = await this.accountFreeUntil();
+    const minLeechers = this.vip.minLeechers ?? 0;
+    const accept = (t: MtTorrent) => {
+      const ft = this.toFreeTorrent(t, vipUntil);
+      if (!ft || results.has(ft.torrentId)) return;
+      // VIP 期的非 free 候选只收有下载需求的（上传只来自下载者）
+      if (ft.vipOnly && ft.leechers < minLeechers) return;
+      results.set(ft.torrentId, ft);
+    };
     for (const plan of await this.searchPlans()) {
       const base = {
         mode: plan.mode,
@@ -261,9 +333,10 @@ export class MTeamAdapter implements PtAdapter {
       });
       // 2) 默认排序头部（mallSingleFree 等不会出现在 discount 过滤结果里）
       const headBatch = await this.search(base);
-      for (const t of [...freeBatch, ...headBatch]) {
-        const ft = this.toFreeTorrent(t);
-        if (ft && !results.has(ft.torrentId)) results.set(ft.torrentId, ft);
+      for (const t of [...freeBatch, ...headBatch]) accept(t);
+      // 3) VIP 期：按下载者数排序的头部（非 free 也能下，目标是上传最大化）
+      if (vipUntil) {
+        for (const t of await this.search({ ...base, sortField: "LEECHERS", sortDirection: "DESC" })) accept(t);
       }
     }
     return [...results.values()];
@@ -282,7 +355,7 @@ export class MTeamAdapter implements PtAdapter {
       return null;
     }
     if (!t) return null;
-    const ft = this.toFreeTorrent(t);
+    const ft = this.toFreeTorrent(t, await this.accountFreeUntil());
     // 非 free 也要返回基本信息（freeEndTime 置为过去，让调用方判定已到期）
     return (
       ft ?? {

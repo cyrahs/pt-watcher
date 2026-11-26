@@ -93,7 +93,11 @@ api.get("/status", async (c) => {
       dlSpeedBytesPerSec: q.dlSpeed,
       upSpeedBytesPerSec: q.upSpeed,
     },
-    mteam: { configured: Boolean(s.mtApiKey) },
+    mteam: {
+      configured: Boolean(s.mtApiKey),
+      // VIP（下载不计量）窗口截止；null = 只下 free
+      vipUntil: (await getAdapters().find((a) => a.siteId === "mteam")?.accountFreeUntil?.())?.toISOString() ?? null,
+    },
     freeSpaceBytes: q.freeBytes,
     freeSpaceThresholdBytes: s.freeSpaceThresholdGB * 1024 ** 3,
     managedUsedBytes: q.managedUsedBytes,

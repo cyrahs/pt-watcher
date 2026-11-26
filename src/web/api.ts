@@ -115,6 +115,7 @@ export interface SiteUserStats {
   downloadedBytes: number;
   shareRate: number | null;
   bonus: number | null;
+  vipUntil?: string | null;
 }
 
 export interface Status {
@@ -127,7 +128,7 @@ export interface Status {
     /** 全局实时上传速度（B/s），未连接时 null */
     upSpeedBytesPerSec: number | null;
   };
-  mteam: { configured: boolean };
+  mteam: { configured: boolean; vipUntil: string | null };
   freeSpaceBytes: number | null;
   freeSpaceThresholdBytes: number;
   diskTotalBytes: number | null;
