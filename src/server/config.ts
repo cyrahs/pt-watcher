@@ -1,3 +1,4 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db";
@@ -7,6 +8,11 @@ import { db, schema } from "./db";
 export const env = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   port: Number(process.env.PORT ?? 3000),
+  /**
+   * 凭据字段（mtApiKey / qbitApiKey）在 settings 表里的加密密钥（任意长度随机串，经 SHA-256 派生 AES-256 密钥）。
+   * 未设置时凭据以明文存库（仅限本地开发），启动时会告警。
+   */
+  settingsSecretKey: process.env.SETTINGS_SECRET_KEY ?? "",
 };
 
 /** 版本标记（镜像构建时由 CI 注入 GIT_SHA），用于把运行数据对应到具体部署 */
@@ -21,7 +27,11 @@ export const buildInfo = {
 export const settingsSchema = z.object({
   // 站点与下载器连接
   mtApiKey: z.string().default(process.env.MT_API_KEY ?? ""),
-  mtBaseUrl: z.string().default(process.env.MT_BASE_URL ?? "https://api.m-team.cc/api"),
+  // 只允许 M-Team 自己的域名：改成别的地址等于把 API key 发给那个地址
+  mtBaseUrl: z
+    .string()
+    .default(process.env.MT_BASE_URL ?? "https://api.m-team.cc/api")
+    .refine(isAllowedMteamBaseUrl, { message: "API 地址只能是 https://*.m-team.cc 或 https://*.m-team.io" }),
   qbitUrl: z.string().default(process.env.QBIT_URL ?? ""),
   qbitApiKey: z.string().default(process.env.QBIT_API_KEY ?? ""),
 
@@ -107,6 +117,113 @@ export type Settings = z.infer<typeof settingsSchema>;
 
 const SETTINGS_KEY = "app";
 
+/** 含凭据的字段：API 只返回占位符，变更记录只标记"已修改"，库里加密存储 */
+export const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
+
+/** API 返回凭据字段时的占位符；PUT 时原样传回（或传空串）表示保持不变 */
+export const REDACTED = "<redacted>";
+
+const ALLOWED_MTEAM_HOSTS = ["m-team.cc", "m-team.io"];
+
+export function isAllowedMteamBaseUrl(value: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" || u.username || u.password) return false;
+  const host = u.hostname.toLowerCase();
+  return ALLOWED_MTEAM_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+// ---- 凭据加密（AES-256-GCM，格式 enc:v1:<iv>:<tag>:<ciphertext>，均为 base64url）----
+
+const ENC_PREFIX = "enc:v1:";
+
+function cipherKey(secret: string): Buffer {
+  return createHash("sha256").update(secret, "utf8").digest();
+}
+
+export function encryptSecret(plain: string, secret: string): string {
+  if (!plain || !secret) return plain;
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", cipherKey(secret), iv);
+  const ct = Buffer.concat([c.update(plain, "utf8"), c.final()]);
+  return ENC_PREFIX + [iv, c.getAuthTag(), ct].map((b) => b.toString("base64url")).join(":");
+}
+
+export function isEncrypted(value: unknown): boolean {
+  return typeof value === "string" && value.startsWith(ENC_PREFIX);
+}
+
+/** 解密失败（密钥不对 / 数据损坏）抛错 */
+export function decryptSecret(value: string, secret: string): string {
+  if (!isEncrypted(value)) return value;
+  if (!secret) throw new Error("settings 里的凭据已加密，但没有设置 SETTINGS_SECRET_KEY");
+  const [iv, tag, ct] = value.slice(ENC_PREFIX.length).split(":").map((p) => Buffer.from(p, "base64url"));
+  if (!iv || !tag || !ct) throw new Error("凭据密文格式错误");
+  const d = createDecipheriv("aes-256-gcm", cipherKey(secret), iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+}
+
+/** 库里的原始 JSON → 明文凭据（只在进程内存里） */
+export function decodeStoredSecrets(raw: Record<string, unknown>, secret: string): Record<string, unknown> {
+  const out = { ...raw };
+  for (const key of SECRET_KEYS) {
+    const v = out[key];
+    if (typeof v !== "string" || !isEncrypted(v)) continue;
+    try {
+      out[key] = decryptSecret(v, secret);
+    } catch (e) {
+      console.error(`[config] ${key} 解密失败，视为未配置:`, e instanceof Error ? e.message : e);
+      out[key] = "";
+    }
+  }
+  return out;
+}
+
+/** 明文配置 → 落库的 JSON（凭据加密） */
+export function encodeSecretsForStorage(s: Settings, secret: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...s };
+  for (const key of SECRET_KEYS) {
+    const v = out[key];
+    if (typeof v === "string" && v) out[key] = encryptSecret(v, secret);
+  }
+  return out;
+}
+
+/** 对外（REST / MCP / UI）返回的配置：凭据字段只给占位符，空值保持空串以便 UI 判断"未配置" */
+export function publicSettings(s: Settings): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...s };
+  for (const key of SECRET_KEYS) {
+    if (typeof out[key] === "string" && out[key]) out[key] = REDACTED;
+  }
+  return out;
+}
+
+/**
+ * PUT 补丁 → 新配置。凭据字段传占位符或空串 = 保持原值。
+ * 改 qBittorrent 地址必须同时填写 API key，避免把已保存的 key 发给新地址（M-Team 地址由白名单约束）。
+ */
+export function mergeSettingsPatch(current: Settings, patch: Record<string, unknown>): Settings {
+  const p: Record<string, unknown> = { ...patch };
+  for (const key of SECRET_KEYS) {
+    if (p[key] === REDACTED || p[key] === "" || p[key] === undefined) delete p[key];
+  }
+  if (typeof p.qbitUrl === "string" && p.qbitUrl !== current.qbitUrl && !("qbitApiKey" in p) && current.qbitApiKey) {
+    throw new SettingsError("修改 qBittorrent 地址时需要同时重新填写 API Key");
+  }
+  const parsed = settingsSchema.safeParse({ ...current, ...p });
+  if (!parsed.success) {
+    throw new SettingsError(parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+  }
+  return parsed.data;
+}
+
+export class SettingsError extends Error {}
+
 let cached: Settings | null = null;
 
 export async function loadSettings(): Promise<Settings> {
@@ -114,9 +231,25 @@ export async function loadSettings(): Promise<Settings> {
     .select()
     .from(schema.settings)
     .where(eq(schema.settings.key, SETTINGS_KEY));
-  const raw = rows[0]?.value ?? {};
-  const parsed = settingsSchema.safeParse(raw);
+  let raw: unknown = rows[0]?.value ?? {};
+  // 早期版本把整个 JSON 当成字符串存进了 jsonb
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      raw = {};
+    }
+  }
+  const stored = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const parsed = settingsSchema.safeParse(decodeStoredSecrets(stored, env.settingsSecretKey));
   cached = parsed.success ? parsed.data : settingsSchema.parse({});
+  if (!env.settingsSecretKey) {
+    console.warn("[config] 未设置 SETTINGS_SECRET_KEY：凭据将以明文存入数据库，仅限本地开发");
+  } else if ([...SECRET_KEYS].some((k) => typeof stored[k] === "string" && stored[k] && !isEncrypted(stored[k]))) {
+    // 旧的明文凭据：启动时就地加密
+    await writeSettings(cached);
+    console.log("[config] 已把 settings 中的明文凭据加密存储");
+  }
   return cached;
 }
 
@@ -124,9 +257,6 @@ export function getSettings(): Settings {
   if (!cached) throw new Error("settings not loaded yet");
   return cached;
 }
-
-/** 含凭据的字段：变更记录只标记"已修改"，不记录值 */
-export const SECRET_KEYS: ReadonlySet<string> = new Set(["mtApiKey", "qbitApiKey"]);
 
 export type SettingsDiff = Record<string, { from: unknown; to: unknown }>;
 
@@ -136,21 +266,26 @@ export function diffSettings(before: Settings, after: Settings): SettingsDiff {
   for (const key of Object.keys(after) as (keyof Settings)[]) {
     if (JSON.stringify(before[key]) === JSON.stringify(after[key])) continue;
     out[key] = SECRET_KEYS.has(key)
-      ? { from: "<redacted>", to: "<redacted>" }
+      ? { from: REDACTED, to: REDACTED }
       : { from: before[key], to: after[key] };
   }
   return out;
 }
 
-export async function saveSettings(patch: unknown): Promise<Settings> {
-  const merged = settingsSchema.parse({ ...(cached ?? {}), ...(patch as object) });
+async function writeSettings(s: Settings) {
+  const value = encodeSecretsForStorage(s, env.settingsSecretKey);
   await db
     .insert(schema.settings)
-    .values({ key: SETTINGS_KEY, value: merged, updatedAt: new Date() })
+    .values({ key: SETTINGS_KEY, value, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: schema.settings.key,
-      set: { value: merged, updatedAt: new Date() },
+      set: { value, updatedAt: new Date() },
     });
+}
+
+export async function saveSettings(patch: unknown): Promise<Settings> {
+  const merged = mergeSettingsPatch(cached ?? settingsSchema.parse({}), (patch ?? {}) as Record<string, unknown>);
+  await writeSettings(merged);
   cached = merged;
   return merged;
 }

@@ -31,7 +31,16 @@ import {
   parseTorrentRef,
 } from "./query";
 import { qbit, QbitClient } from "../qbit/client";
-import { buildInfo, diffSettings, getSettings, saveSettings } from "../config";
+import {
+  buildInfo,
+  diffSettings,
+  getSettings,
+  isAllowedMteamBaseUrl,
+  publicSettings,
+  REDACTED,
+  saveSettings,
+  SettingsError,
+} from "../config";
 import { qbitOverview } from "../services/overview";
 import { MTeamAdapter } from "../pt/mteam";
 import { getAdapters, resetAdapters } from "../pt/registry";
@@ -432,7 +441,8 @@ api.get("/pt/categories", async (c) => {
   return c.json(all);
 });
 
-api.get("/settings", (c) => c.json(getSettings()));
+// 凭据字段只返回占位符：应用本身不做鉴权，集群内任何 Pod 都能访问这个 API
+api.get("/settings", (c) => c.json(publicSettings(getSettings())));
 
 api.put("/settings", async (c) => {
   const body = await c.req.json();
@@ -448,8 +458,9 @@ api.put("/settings", async (c) => {
       keys.length > 0 ? `配置已更新: ${keys.join(", ")}` : "配置已保存（无变更）",
       { payload: { changes } },
     );
-    return c.json(saved);
+    return c.json(publicSettings(saved));
   } catch (e) {
+    if (e instanceof SettingsError) return c.json({ error: e.message }, 400);
     if (e instanceof ZodError) {
       const msg = e.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
       return c.json({ error: msg }, 400);
@@ -458,14 +469,22 @@ api.put("/settings", async (c) => {
   }
 });
 
+/** 表单里新填写的凭据；占位符 / 空串表示沿用已保存的值 */
+function freshSecret(v: unknown): string | undefined {
+  return typeof v === "string" && v && v !== REDACTED ? v : undefined;
+}
+
 // 连接测试：用请求体里的表单当前值（可未保存），缺省回退到已保存配置
 api.post("/test/mteam", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const s = getSettings();
-  const apiKey = typeof body.mtApiKey === "string" ? body.mtApiKey : s.mtApiKey;
+  const apiKey = freshSecret(body.mtApiKey) ?? s.mtApiKey;
   const baseUrl =
     typeof body.mtBaseUrl === "string" && body.mtBaseUrl ? body.mtBaseUrl : s.mtBaseUrl;
   if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
+  if (!isAllowedMteamBaseUrl(baseUrl)) {
+    return c.json({ error: "API 地址只能是 https://*.m-team.cc 或 https://*.m-team.io" }, 400);
+  }
   try {
     const username = await new MTeamAdapter({ apiKey, baseUrl }).testConnection();
     return c.json({ ok: true, message: `连接成功，账号: ${username}` });
@@ -478,7 +497,12 @@ api.post("/test/qbit", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const s = getSettings();
   const baseUrl = typeof body.qbitUrl === "string" && body.qbitUrl ? body.qbitUrl : s.qbitUrl;
-  const apiKey = typeof body.qbitApiKey === "string" ? body.qbitApiKey : s.qbitApiKey;
+  const typedKey = freshSecret(body.qbitApiKey);
+  // 已保存的 key 只发给已保存的地址
+  if (!typedKey && baseUrl !== s.qbitUrl) {
+    return c.json({ error: "测试新的 WebUI 地址需要同时填写 API Key" }, 400);
+  }
+  const apiKey = typedKey ?? s.qbitApiKey;
   if (!baseUrl) return c.json({ error: "请先填写 WebUI 地址" }, 400);
   if (!apiKey) return c.json({ error: "请先填写 API Key" }, 400);
   try {

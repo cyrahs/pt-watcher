@@ -1,7 +1,9 @@
 node_modules/
 dist/
+# 任何 env 文件都可能含凭据（曾经的 .dev.env 就把真实 API key 推到了公开仓库）
 .env
 .env.*
+*.env
 !.env.example
 *.log
 .DS_Store
