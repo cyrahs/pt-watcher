@@ -8,6 +8,9 @@ import { z, type ZodRawShape } from "zod";
 import { apiConventions } from "../api/docs";
 import { buildInfo, SECRET_KEYS } from "../config";
 
+/** 连接地址：改了就会把已保存的凭据发往新地址，只允许在 Web UI 改 */
+const CONNECTION_KEYS: ReadonlySet<string> = new Set(["mtBaseUrl", "qbitUrl"]);
+
 /** 能在进程内处理请求的 /api 应用（生产为 api/routes 的 Hono 实例，测试可替换） */
 export interface ApiApp {
   request(input: string, init?: RequestInit): Response | Promise<Response>;
@@ -351,14 +354,14 @@ export const tools: ToolDef[] = [
     name: "update_settings",
     title: "修改配置",
     description:
-      "部分更新配置：changes 只放要改的字段（字段名与类型同 get_settings），保存后立即生效，变更记入 settings_updated 事件。凭据字段（mtApiKey / qbitApiKey）不能经 MCP 修改",
+      "部分更新配置：changes 只放要改的字段（字段名与类型同 get_settings），保存后立即生效，变更记入 settings_updated 事件。凭据与连接地址字段（mtApiKey / qbitApiKey / mtBaseUrl / qbitUrl）不能经 MCP 修改",
     method: "PUT",
     route: "/settings",
     readOnly: false,
     input: { changes: z.record(z.unknown()).describe("要修改的字段，如 {\"cleanDryRun\": false}") },
     reject: (a) => {
-      const secret = Object.keys(a.changes).filter((k) => SECRET_KEYS.has(k));
-      return secret.length > 0 ? `凭据字段不能经 MCP 修改，请在 Web UI 设置: ${secret.join(", ")}` : undefined;
+      const secret = Object.keys(a.changes).filter((k) => SECRET_KEYS.has(k) || CONNECTION_KEYS.has(k));
+      return secret.length > 0 ? `凭据与连接地址字段不能经 MCP 修改，请在 Web UI 设置: ${secret.join(", ")}` : undefined;
     },
     call: (a) => ({ path: "/settings", body: a.changes }),
     transform: redactSettings,

@@ -1,0 +1,24 @@
+# gitleaks 默认规则 + 本项目用到的凭据格式
+[extend]
+useDefault = true
+
+[[rules]]
+id = "mteam-api-key"
+description = "M-Team 存取令牌（UUID 形式的 x-api-key）"
+regex = '''(?i)(?:mt|mteam|m-team|x-api-key)[\w-]*["']?\s*[:=]\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})'''
+secretGroup = 1
+keywords = ["mt", "m-team", "x-api-key"]
+
+[[rules]]
+id = "qbittorrent-api-key"
+description = "qBittorrent WebUI API key"
+regex = '''\b(qbt_[A-Za-z0-9]{20,})\b'''
+secretGroup = 1
+keywords = ["qbt_"]
+
+[[rules]]
+id = "mteam-tracker-credential"
+description = "M-Team tracker announce credential (等同 passkey)"
+regex = '''tracker\.m-team\.(?:cc|io)/announce\?credential=([A-Za-z0-9+/=%]{20,})'''
+secretGroup = 1
+keywords = ["m-team"]

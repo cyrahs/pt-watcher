@@ -271,6 +271,7 @@ export function Settings() {
                       id={f.key}
                       type={f.type === "number" ? "number" : f.type === "password" ? "password" : "text"}
                       autoComplete={f.type === "password" ? "new-password" : undefined}
+                      placeholder={f.type === "password" ? "未配置（已保存的值不会回显，留空保持不变）" : undefined}
                       step="any"
                       value={
                         f.type === "list" ? (Array.isArray(v) ? v.join(", ") : "") : String(v ?? "")

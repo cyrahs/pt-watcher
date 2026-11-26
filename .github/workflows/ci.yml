@@ -11,6 +11,18 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # 仓库是公开的：扫描本次推送 / PR 新增的提交里有没有凭据
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -24,7 +36,7 @@ jobs:
       - run: bun run build
 
   image:
-    needs: test
+    needs: [secrets, test]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

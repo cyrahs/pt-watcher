@@ -27,11 +27,17 @@
 | --- | --- |
 | `DATABASE_URL` | Postgres 连接串，如 `postgres://user:pass@host:5432/ptwatcher` |
 | `PORT` | 可选，默认 3000 |
+| `SETTINGS_SECRET_KEY` | 凭据加密密钥（任意随机串，如 `openssl rand -base64 32`）。设置后 settings 表里的 M-Team / qBittorrent API key 以 AES-256-GCM 加密存储，已有明文值在启动时自动加密；未设置时明文存储，仅限本地开发。更换密钥后需在 UI 重新填写凭据 |
 
 其余配置全部存 Postgres `settings` 表，通过 Web UI「设置」页修改：
 
 - **连接配置**：M-Team API key（控制台 → 实验室 → 存取令牌）与 API 地址、qBittorrent WebUI 地址与 API key（需 qBittorrent ≥ 5.2，在 WebUI 设置中生成，形如 `qbt_...`），保存后立即生效无需重启
 - **行为配置**：阈值、间隔、受管分类、评分权重等
+
+凭据保护：
+- API（`GET /api/settings`、MCP `get_settings`）只返回占位符 `<redacted>`，不回传已保存的 key；保存时凭据字段留空或传回占位符表示保持不变
+- M-Team API 地址只允许 `https://*.m-team.cc` / `https://*.m-team.io`；修改 qBittorrent 地址必须同时重新填写 API key；MCP 不能修改凭据和连接地址。避免任何能访问 API 的人把已保存的 key 发到自己的地址
+- 仓库是公开的：任何真实凭据都不要写进仓库文件（含 `.dev.env` 一类的本地文件），CI 用 gitleaks 扫描每次提交
 
 兼容迁移：settings 表中尚无对应值时，`MT_API_KEY` / `MT_BASE_URL` / `QBIT_URL` / `QBIT_API_KEY` 环境变量会作为初始默认值被读入（首次保存后即以 UI 中的值为准）。
 
